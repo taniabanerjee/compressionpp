@@ -6,9 +6,12 @@
 #include <adios2.h>
 #include <mpi.h>
 #include <assert.h>
+#include <time.h>
 #include "npy.hpp"
 
 using namespace std;
+double determinant(double a[4][4], double k);
+double** cofactor(double num[4][4], double f);
 int ndata = 16395, n_phi = 8, nsize = 39;
 void load_npy_file(const char* path, vector <double> &data,
     vector<unsigned long> &shape)
@@ -121,7 +124,7 @@ vector <double> qoi_V3(vector <double> &vol, vector <double> &vth2,
         for (j=0; j<nsize; ++j)
             for (k=0; k<nsize; ++k)
                 V3.push_back(vol[nsize*nsize*i + nsize*j + k] * 0.5 *
-                    mu_qoi[k] * vth2[i] * ptl_mass);
+                    mu_qoi[j] * vth2[i] * ptl_mass);
     }
 
     return V3;
@@ -137,7 +140,7 @@ vector <double> qoi_V4(vector <double> &vol, vector <double> &vth2,
         for (j=0; j<nsize; ++j)
             for (k=0; k<nsize; ++k)
                 V4.push_back(vol[nsize*nsize*i + nsize*j + k] *
-                    vp[k] * vth2[i] * ptl_mass);
+                    vp[k]*vp[k] * vth2[i] * ptl_mass);
     }
 
     return V4;
@@ -169,6 +172,16 @@ void checkVectorsV(vector <double> V2, vector <double> V3, vector <double> V4, v
         if (abs(V4_data[i]-V4[i]) > 100) {
             printf("i = %d, data-read = %g, data-computed= %g\n", i, V4_data[i], V4[i]);
         }
+        // printf("i = %d, data-read = %g, data-computed= %g\n", i, V4_data[i], V4[i]);
+    }
+    vector<unsigned long> Tpara_data_shape;
+    vector <double> Tpara_data;
+    load_npy_file("./Tpara.npy", Tpara_data, Tpara_data_shape);
+    for (i=0; i<Tpara_data.size(); ++i) {
+        if (abs(Tpara_data[i]-Tpara[i]) > 100) {
+            printf("i = %d, data-read = %g, data-computed= %g\n", i, Tpara_data[i], Tpara[i]);
+        }
+        // printf("i = %d, data-read = %g, data-computed= %g\n", i, Tpara_data[i], Tpara[i]);
     }
 }
 
@@ -184,14 +197,17 @@ double rmse_error(vector <double> &x, vector <double> &y)
     return sqrt(e/xsize);
 }
 
-bool isConverged(vector <double> difflist)
+bool isConverged(vector <double> difflist, double eB)
 {
-    bool status = true;
+    bool status = false;
     unsigned int vsize = difflist.size();
-    double firstVal = difflist[0];
-    double lastVal = difflist[vsize-1];
-    if ((lastVal - firstVal) > 0) {
-        status = false;
+    if (vsize < 2) {
+         return status;
+    }
+    double last2Val = difflist[vsize-2];
+    double last1Val = difflist[vsize-1];
+    if (abs(last2Val - last1Val) < eB) {
+        status = true;
     }
     return status;
 }
@@ -292,17 +308,47 @@ int main(int argc, char** argv)
     }
     // compare vectors V2, V3, V4, and Tpara
     checkVectorsV(V2, V3, V4, tpara_data);
+    clock_t start, end;
+    double cpu_time_used;
+    start = clock();
     for (p=0; p<8; ++p) {
+        double* D = &den_f[p*ndata];
+        double* U = &upara_f[p*ndata];
+        double* Tperp = &tperp_f[p*ndata];
+        double* Tpara = &tpara_data[p*ndata];
+        int count_unLag = 0;
+        vector <int> node_unconv;
+        double maxD = -99999;
+        double maxU = -99999;
+        double maxTperp = -99999;
+        double maxTpara = -99999;
+        for (i=0; i<ndata; ++i) {
+            if (D[i] > maxD) {
+                maxD = D[i];
+            }
+            if (U[i] > maxU) {
+                maxU = U[i];
+            }
+            if (Tperp[i] > maxTperp) {
+                maxTperp = Tperp[i];
+            }
+            if (Tpara[i] > maxTpara) {
+                maxTpara = Tpara[i];
+            }
+        }
+        double DeB = pow(maxD*1e-09, 2);
+        double UeB = pow(maxU*1e-09, 2);
+        double TperpEB = pow(maxTperp*1e-09, 2);
+        double TparaEB = pow(maxTpara*1e-09, 2);
         for (idx=0; idx<ndata; ++idx) {
+            double* recon_one = &recon[ndata*nsize*nsize*p + nsize*nsize*idx];
             double lambdas[4] = {0.0, 0.0, 0.0, 0.0};
-            double D = den_f[p*ndata + idx];
-            double U = upara_f[p*ndata + idx];
-            double Tperp = tperp_f[p*ndata + idx];
-            double Tpara = tpara_data[p*ndata + idx];
             vector <double> L2_den;
             vector <double> L2_upara;
             vector <double> L2_tperp;
             vector <double> L2_tpara;
+            count = 0;
+            double aD = D[idx]*sml_e_charge;
             while (1) {
                 for (i=0; i<nsize*nsize; ++i) {
                     K[i] = lambdas[0]*vol[nsize*nsize*idx + i] +
@@ -310,27 +356,33 @@ int main(int argc, char** argv)
                            lambdas[2]*V3[nsize*nsize*idx + i] +
                            lambdas[3]*V4[nsize*nsize*idx + i];
                 }
-                double update_D, update_U, update_Tperp, update_Tpara;
+                double update_D=0, update_U=0, update_Tperp=0, update_Tpara=0;
                 if (count > 0) {
                     for (i=0; i<nsize*nsize; ++i) {
-                        breg_result[i] = recon[nsize*nsize*idx + i]*
+                        breg_result[i] = recon_one[i]*
                             exp(-K[i]);
                         update_D += breg_result[i]*vol[
                             nsize*nsize*idx + i];
                         update_U += breg_result[i]*V2[
-                            nsize*nsize*idx + i];
+                            nsize*nsize*idx + i]/D[idx];
                         update_Tperp += breg_result[i]*V3[
-                            nsize*nsize*idx + i];
+                            nsize*nsize*idx + i]/aD;
                         update_Tpara += breg_result[i]*V4[
-                            nsize*nsize*idx + i];
+                            nsize*nsize*idx + i]/D[idx];
                     }
-                    L2_den.push_back(pow((update_D-D), 2));
-                    L2_upara.push_back(pow((update_U-U), 2));
-                    L2_tperp.push_back(pow((update_Tperp-Tperp), 2));
-                    L2_tpara.push_back(pow((update_Tpara-Tpara), 2));
-                    bool converged = (isConverged(L2_den) &&
-                           isConverged(L2_upara) && isConverged(
-                           L2_tpara) && isConverged(L2_tperp));
+                    L2_den.push_back(pow((update_D - D[idx]), 2));
+                    L2_upara.push_back(pow((update_U - U[idx]), 2));
+                    L2_tperp.push_back(pow((update_Tperp-Tperp[idx]), 2));
+                    L2_tpara.push_back(pow((update_Tpara-Tpara[idx]), 2));
+                    // L2_den.push_back(update_D);
+                    // L2_upara.push_back(update_U);
+                    // L2_tperp.push_back(update_Tperp);
+                    // L2_tpara.push_back(update_Tpara);
+                    bool c1, c2, c3, c4;
+                    bool converged = (isConverged(L2_den, DeB)
+                        && isConverged(L2_upara, UeB)
+                        && isConverged(L2_tpara, TparaEB)
+                        && isConverged(L2_tperp, TperpEB));
                     if (converged) {
                         for (i=0; i<nsize*nsize; ++i) {
                             recon_breg.push_back(breg_result[i]);
@@ -339,54 +391,66 @@ int main(int argc, char** argv)
                         lagranges.push_back(lambdas[1]);
                         lagranges.push_back(lambdas[2]);
                         lagranges.push_back(lambdas[3]);
+                        if (idx % 2000 == 0) {
+                            printf ("node %d finished\n", idx);
+                        }
+                        break;
                     }
-                    else if (count == 20 && !converged){
-                        printf ("Node did not converge\n");
+                    else if (count == 20 && !converged) {
+                        printf ("Node %d did not converge\n", idx);
+                        count_unLag = count_unLag + 1;
+                        node_unconv.push_back(idx);
+                        break;
                     }
                 }
-                double gvalue1 = 0, gvalue2 = 0, gvalue3 = 0, gvalue4 = 0;
+                double gvalue1 = D[idx], gvalue2 = U[idx]*D[idx];
+                double gvalue3 = Tperp[idx]*aD, gvalue4 = Tpara[idx]*D[idx];
                 double hvalue1 = 0, hvalue2 = 0, hvalue3 = 0, hvalue4 = 0;
                 double hvalue5 = 0, hvalue6 = 0, hvalue7 = 0;
                 double hvalue8 = 0, hvalue9 = 0, hvalue10 = 0;
 
+#if 0
+                for (i=0; i<2*nsize; ++i) {
+                    gvalue3 += recon_one[i]*
+                          V3[nsize*nsize*idx + i]*exp(-K[i])*-1.0;
+                    printf ("i=%d, gvalue = %g, recon = %g, vol = %g, exp = %g, den = %g\n", i, gvalue3, recon_one[i], V3[nsize*nsize*idx + i], exp(-K[i]),  Tperp[idx]*aD);
+                }
+#endif
                 for (i=0; i<nsize*nsize; ++i) {
-                    gvalue1 += recon[nsize*nsize*idx + i]*
-                      vol[nsize*nsize*idx + i]*exp(-K[i]) +
-                      den_f[p*ndata + idx];
-                    gvalue2 += recon[nsize*nsize*idx + i]*
-                      V2[nsize*nsize*idx + i]*exp(-K[i]) +
-                      upara_f[p*ndata + idx]*den_f[p*ndata + idx];
-                    gvalue3 += recon[nsize*nsize*idx + i]*
-                      V3[nsize*nsize*idx + i]*exp(-K[i]) +
-                      tperp_f[p*ndata + idx]*den_f[p*ndata + idx]*sml_e_charge;
-                    gvalue4 += recon[nsize*nsize*idx + i]*
-                      V4[nsize*nsize*idx + i]*exp(-K[i]) +
-                      tpara_f[p*ndata + idx]*den_f[p*ndata + idx];
-                    hvalue1 += recon[nsize*nsize*idx + i]*pow(
+                    gvalue1 += recon_one[i]*vol[nsize*nsize*idx + i]*
+                      exp(-K[i])*-1.0;
+                    gvalue2 += recon_one[i]*
+                      V2[nsize*nsize*idx + i]*exp(-K[i])*-1.0;
+                    gvalue3 += recon_one[i]*
+                      V3[nsize*nsize*idx + i]*exp(-K[i])*-1.0;
+                    gvalue4 += recon_one[i]*
+                      V4[nsize*nsize*idx + i]*exp(-K[i])*-1.0;
+
+                    hvalue1 += recon_one[i]*pow(
                         vol[nsize*nsize*idx + i], 2)*exp(-K[i]);
-                    hvalue2 += recon[nsize*nsize*idx + i]* vol[
+                    hvalue2 += recon_one[i]* vol[
                         nsize*nsize*idx + i]*V2[nsize*nsize*idx + i]*
                         exp(-K[i]);
-                    hvalue3 += recon[nsize*nsize*idx + i]* vol[
+                    hvalue3 += recon_one[i]* vol[
                         nsize*nsize*idx + i]*V3[nsize*nsize*idx + i]*
                         exp(-K[i]);
-                    hvalue4 += recon[nsize*nsize*idx + i]* vol[
+                    hvalue4 += recon_one[i]* vol[
                         nsize*nsize*idx + i]*V4[nsize*nsize*idx + i]*
                         exp(-K[i]);
-                    hvalue5 += recon[nsize*nsize*idx + i]*pow(
+                    hvalue5 += recon_one[i]*pow(
                         V2[nsize*nsize*idx + i],2)*exp(-K[i]);
-                    hvalue6 += recon[nsize*nsize*idx + i]*V2[
+                    hvalue6 += recon_one[i]*V2[
                         nsize*nsize*idx + i]*V3[nsize*nsize*idx + i]*
                         exp(-K[i]);
-                    hvalue7 += recon[nsize*nsize*idx + i]*V2[
+                    hvalue7 += recon_one[i]*V2[
                         nsize*nsize*idx + i]*V4[nsize*nsize*idx + i]*
                         exp(-K[i]);
-                    hvalue8 += recon[nsize*nsize*idx + i]*pow(
+                    hvalue8 += recon_one[i]*pow(
                         V3[nsize*nsize*idx + i],2)*exp(-K[i]);
-                    hvalue9 += recon[nsize*nsize*idx + i]*V3[
+                    hvalue9 += recon_one[i]*V3[
                         nsize*nsize*idx + i]*V4[nsize*nsize*idx + i]*
                         exp(-K[i]);
-                    hvalue10 += recon[nsize*nsize*idx + i]*pow(
+                    hvalue10 += recon_one[i]*pow(
                         V4[nsize*nsize*idx + i],2)*exp(-K[i]);
                 }
                 gradients[0] = gvalue1;
@@ -397,7 +461,7 @@ int main(int argc, char** argv)
                 hessians[0][1] = hvalue2;
                 hessians[0][2] = hvalue3;
                 hessians[0][3] = hvalue4;
-                hessians[1][0] = hvalue1;
+                hessians[1][0] = hvalue2;
                 hessians[1][1] = hvalue5;
                 hessians[1][2] = hvalue6;
                 hessians[1][3] = hvalue7;
@@ -410,10 +474,33 @@ int main(int argc, char** argv)
                 hessians[3][2] = hvalue9;
                 hessians[3][3] = hvalue10;
                 // compute lambdas
+                int order = 4;
+                int k;
+                double d = determinant(hessians, order);
+                if (d == 0) {
+                    printf ("Need to define pesudoinverse for matrix in node %d\n", idx);
+                }
+                else{
+                    double** inverse = cofactor(hessians, order);
+                    double matmul[4] = {0, 0, 0, 0};
+                    for (i=0; i<4; ++i) {
+                        matmul[i] = 0;
+                        for (k=0; k<4; ++k) {
+                            matmul[i] += inverse[i][k] * gradients[k];
+                        }
+                    }
+                    lambdas[0] = lambdas[0] - matmul[0];
+                    lambdas[1] = lambdas[1] - matmul[1];
+                    lambdas[2] = lambdas[2] - matmul[2];
+                    lambdas[3] = lambdas[3] - matmul[3];
+                }
                 count = count + 1;
             }
         }
     }
+    end = clock();
+    cpu_time_used = ((double) (end - start))/CLOCKS_PER_SEC;
+    printf ("time taken %g seconds", cpu_time_used);
     //compute reconstruction RMSE
     double recon_rmse = rmse_error(i_f, recon);
     //compute breg RMSE

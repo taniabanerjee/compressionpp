@@ -29,6 +29,8 @@ import xgc4py
 import nanopq
 #from torchsummary import summary
 
+import time
+
 
 # In[2]:
 
@@ -285,7 +287,17 @@ print(ndata)
 f0_inode1 = 0
 
 #vol, vth, vp, mu_qoi, vth2, ptl_mass, sml_e_charge, f0_grid_vol, mu_vp_vol= xgcexp.f0_diag_vol(f0_inode1=f0_inode1, ndata=ndata, isp=1, f0_f=f0_f)
-vol, vth, vp, mu_qoi, vth2, ptl_mass, sml_e_charge, f0_grid_vol, mu_vp_vol= xgcexp.f0_diag_vol_origdim(f0_inode1=f0_inode1, ndata=ndata, isp=1, f0_f=f0_f)
+vol1, vth1, vp1, mu_qoi1, vth21, ptl_mass, sml_e_charge, f0_grid_vol1, mu_vp_vol1= xgcexp.f0_diag_vol_origdim(f0_inode1=f0_inode1, ndata=ndata, isp=1, f0_f=f0_f)
+del f0_f
+f0_f = np.copy(i_f[1])
+vol2, vth2, vp2, mu_qoi2, vth22, ptl_mass, sml_e_charge, f0_grid_vol2, mu_vp_vol2= xgcexp.f0_diag_vol_origdim(f0_inode1=f0_inode1, ndata=ndata, isp=1, f0_f=f0_f)
+print(np.array_equal(vol1, vol2))
+print(np.array_equal(vth1, vth2))
+print(np.array_equal(vp1, vp2))
+print(np.array_equal(mu_qoi1, mu_qoi2))
+print(np.array_equal(vth21, vth22))
+print(np.array_equal(f0_grid_vol1, f0_grid_vol2))
+print(np.array_equal(mu_vp_vol1, mu_vp_vol2))
 
 np.save('./vol.npy', vol.astype(float))
 np.save('./vth.npy', vth.astype(float))
@@ -298,7 +310,6 @@ np.save('./mu_vp_vol.npy', mu_vp_vol.astype(float))
 # In[7]:
 
 
-del f0_f
 
 
 # In[8]:
@@ -628,12 +639,10 @@ Tp = np.zeros((8,16395))
 for p in range(8):
     Tp[p] = (sml_e_charge * tpara_f[p] + (vth2 * ptl_mass * ((upara_f[p]/vth)**2)))
 np.save('./Tpara.npy', Tp.astype(float))
+tic = time.perf_counter()
 for p in range(8):
+    print ('plane', p)
     V2, V3, V4 = qoi_numerator_matrices(i_f[p], vth, vp, mu_qoi, vth2, ptl_mass, sml_e_charge)
-    np.save('./V2.npy', V2.astype(float))
-    np.save('./V3.npy', V3.astype(float))
-    np.save('./V4.npy', V4.astype(float))
-    print('V2 V3 V4 shape: ', V2.shape, V3.shape, V4.shape)
     
     D = den_f[p]
     U = upara_f[p]
@@ -775,6 +784,8 @@ for p in range(8):
             
             count = count + 1
         
+    toc = time.perf_counter()
+    print ("time taken = ", (toc - tic), "seconds")
     print('max original f: ', np.max(i_f[p]))
     print('eb {} max plane {} recon breg: '.format(eb, p), np.max(recon_breg[p]))
     recon_rmse = rmse_error(i_f[p], recon[p])
