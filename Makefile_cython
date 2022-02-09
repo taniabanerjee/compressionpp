@@ -1,0 +1,21 @@
+CC=mpicxx -g
+target=postp
+helper=inverse_matrix
+
+XGC_INCLUDE=-I/gpfs/alpine/csc143/scratch/tania/xgc4py/c-bind
+NUMPY_INCLUDE=-I`python -c "import numpy; print(numpy.get_include())"`
+
+ADIOS2_CFLAGS=`adios2-config --cxx-flags`
+ADIOS2_LIBS=`adios2-config --cxx-libs`
+
+CFLAGS=`python3-config --cflags` ${NUMPY_INCLUDE} ${ADIOS2_CFLAGS} ${XGC_INCLUDE} -I/ccs/home/tania/libnpy/include
+#LDFLAGS=`python3-config --ldflags` -L${HOME}/anaconda3/lib -lpython3.9 -Xlinker -rpath -Xlinker ${HOME}/anaconda3/lib ${ADIOS2_LIBS}
+LDFLAGS=-L/gpfs/alpine/csc143/world-shared/jyc/summit/sw/spack/opt/spack/linux-rhel8-power9le/gcc-9.1.0/gettext-0.21-7roebiyjyiv7daxurexpza3q42cczged/lib `python3-config --ldflags` -lpython3.9 ${ADIOS2_LIBS}
+
+all:
+	$(CC) -c $(helper).cpp
+	echo $(CC) $(CFLAGS) -c $(target).cpp
+	$(CC) $(CFLAGS) -c $(target).cpp -std=c++11
+	$(CC) *.o -o $(target) $(LDFLAGS) /gpfs/alpine/csc143/scratch/tania/xgc4py/c-bind/xgc4py_c_bind.o
+clean:
+	rm -f *.o $(target)
