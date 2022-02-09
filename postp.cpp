@@ -1,3 +1,5 @@
+//#include <Python.h>
+//#include "xgc4py_c_bind.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,27 +29,21 @@ void load_npy_file(const char* path, vector <double> &data,
 void read_mgard_file()
 {
     // double* f0_g = (double*)mkl_malloc(n_phi*ndata*sizeof(double), 64);
-    std::vector<double> f0_g(8*16395*39*39);
-    const char* filename = "/gpfs/alpine/csc143/proj-shared/ljm/MGARD_2/MGARD-SMC/build/v2_1000/uniform/d3d_coarse_v2_1000.bp.mgard.4d.s0.4e15";
-    adios2::ADIOS adios;
-    adios2::IO io = adios.DeclareIO("CheckpointRestart");
-    adios2::Engine reader = io.Open(filename, adios2::Mode::Read);
-    adios2::Variable<double> vT = io.InquireVariable<double>("i_f_4d");
-    if (vT) {
-        reader.Get(vT, f0_g.data());
-    }
-    reader.Close();
-
+    // std::vector<double> f0_g(8*16395*39*39);
 #if 0
- 232 for i in range(len(reduced_eb)):
- 233     filename = '/gpfs/alpine/csc143/proj-shared/ljm/MGARD_2/MGARD-SMC/build     /v2_{0}/uniform/d3d_coarse_v2_{0}.bp.mgard.4d.s{1}.{2}'.format(timestep,s_v     al,reduced_eb[i])
- 234     with ad2.open(filename, 'r') as f:
- 235         f0_g = f.read('i_f_4d')
- 236     print(f0_g.shape)
- 237     print(type(f0_g[0][0][0][0]))
- 238     np.save('./results/MGARD_Lagrange_expected/v2_{}/MGARD_uniform_raw/MGAR     D_uniform_{}.npy'.format(timestep, reduced_eb[i]), f0_g)
- 239     del f0_g
+    const char* datapath = "../XGC_2/dataset/";
+    adios2::IO read_vol_io = ad.DeclareIO("xgc_vol");
+    char vol_file[2048];
+    sprintf(vol_file, "%sxgc.mesh.bp", datapath);
+    adios2::Engine reader_vol = read_vol_io.Open(vol_file, adios2::Mode::Read);
+    var_i_f_in = read_vol_io.InquireVariable<double>("f0_grid_vol_vonly");
+    size_t nnodes = var_i_f_in.Shape()[1];
+    var_i_f_in.SetSelection(adios2::Box<adios2::Dims>({0, 0}, {1, nnodes}));
+    std::vector<double> grid_vol;
+    reader_vol.Get<double>(var_i_f_in, grid_vol);
+    reader_vol.Close();
 #endif
+    return;
 }
 
 void qoi_numerator_para(vector <double> &f0_f, vector <double> &vth,
@@ -212,8 +208,174 @@ bool isConverged(vector <double> difflist, double eB)
     return status;
 }
 
+void compute_C_qois(vector <double> &i_f, int iphi, vector <double> &vol, vector <double> &vth,
+    vector <double> &vp, vector <double> &mu_qoi, vector <double> &vth2,
+    double ptl_mass, double sml_e_charge, vector <double> &den_f,
+    vector <double> &upara_f, vector <double> &tperp_f,
+    vector <double> &tpara_f, vector <double> den_f_data, vector <double> upara_f_data, vector <double> tperp_f_data, vector <double> tpara_f_data)
+{
+    vector <double> den;
+    vector <double> upar;
+    vector <double> upar_;
+    vector <double> tper;
+    vector <double> en;
+    vector <double> T_par;
+    int i, j, k;
+    double* f0_f = &i_f[iphi*ndata*nsize*nsize];
+    int den_index = iphi*ndata;
+
+    for (i=0; i<ndata*nsize*nsize; ++i) {
+        den.push_back(f0_f[i] * vol[i]);
+    }
+
+    double value = 0;
+    for (i=0; i<ndata; ++i) {
+        value = 0;
+        for (j=0; j<nsize*nsize; ++j) {
+            value += den[nsize*nsize*i + j];
+        }
+        den_f.push_back(value);
+    }
+    for (i=0; i<ndata; ++i) {
+        for (j=0; j<nsize; ++j)
+            for (k=0; k<nsize; ++k)
+                upar.push_back(f0_f[nsize*nsize*i + nsize*j + k] *
+                    vol[nsize*nsize*i + nsize*j + k] *
+                    vth[i]*vp[k]);
+    }
+    for (i=0; i<ndata; ++i) {
+        double value = 0;
+        for (j=0; j<nsize*nsize; ++j) {
+            value += upar[nsize*nsize*i + j];
+        }
+        upara_f.push_back(value/den_f[den_index + i]);
+    }
+    for (i=0; i<ndata; ++i) {
+        upar_.push_back(upara_f[den_index + i]/vth[i]);
+    }
+    for (i=0; i<ndata; ++i) {
+        for (j=0; j<nsize; ++j)
+            for (k=0; k<nsize; ++k)
+                tper.push_back(f0_f[nsize*nsize*i + nsize*j + k] *
+                    vol[nsize*nsize*i + nsize*j + k] * 0.5 *
+                    mu_qoi[j] * vth2[i] * ptl_mass);
+    }
+    for (i=0; i<ndata; ++i) {
+        double value = 0;
+        for (j=0; j<nsize*nsize; ++j) {
+            value += tper[nsize*nsize*i + j];
+        }
+        tperp_f.push_back(value/den_f[den_index + i]/sml_e_charge);
+    }
+    for (i=0; i<ndata; ++i) {
+        for (j=0; j<nsize; ++j)
+            en.push_back(0.5*pow((vp[j]-upar_[i]),2));
+    }
+    for (i=0; i<ndata; ++i) {
+        for (j=0; j<nsize; ++j)
+            for (k=0; k<nsize; ++k)
+                T_par.push_back(f0_f[nsize*nsize*i + nsize*j + k] *
+                    vol[nsize*nsize*i + nsize*j + k] *
+                    en[nsize*i+k] * vth2[i] * ptl_mass);
+    }
+    for (i=0; i<ndata; ++i) {
+        double value = 0;
+        for (j=0; j<nsize*nsize; ++j) {
+            value += T_par[nsize*nsize*i + j];
+        }
+        tpara_f.push_back(2.0*value/den_f[den_index + i]/sml_e_charge);
+    }
+}
+
+#if 0
+void compute_qois(int num_planes, int num_nodes, vector<double> i_f)
+{
+   /* Setup */
+   PyImport_AppendInittab("xgc4py_c_bind", PyInit_xgc4py_c_bind);
+   Py_Initialize();
+   PyImport_ImportModule("xgc4py_c_bind");
+
+   /* Initialization */
+   // xgc4py_init("/gpfs/alpine/csc143/proj-shared/tania/XGC_2/dataset", 420);
+   xgc4py_init("d3d_coarse_v2", 420);
+   // xgc4py_init("d3d_coarse_v2", 420);
+
+   int f0_f_offset = 0;
+   int f0_f_ndata = num_nodes;
+   int isp = 1;
+   double *f0_f = (double*) malloc(num_nodes*39*39*sizeof(double));
+   long f0_f_shap[3] = {num_nodes, 39, 39};
+   int f0_f_ndim = 3;
+
+   for (int i=0; i<16395*39*39; i++)
+   {
+       f0_f[i] = 1.0;
+   }
+
+   double *vol = (double*) malloc(16395*39*39*sizeof(double));
+   double *vth = (double*) malloc(16395*sizeof(double));
+   double *vth2 = (double*) malloc(16395*sizeof(double));
+   double *vp = (double*) malloc(39*sizeof(double));
+   double *mu_vol = (double*) malloc(39*sizeof(double));
+   double ptl_mass, sml_e_charge;
+
+   /* Call f0_param */
+   xgc4py_f0_param(f0_f_offset, f0_f_ndata, isp,
+               f0_f, f0_f_shap, f0_f_ndim,  /* f0_f data (input) */
+               vol, vth, vth2, vp, mu_vol, /* (output) */
+               &ptl_mass, &sml_e_charge, /* (output) */
+               f0_grid_vol, mu_vp_vol); /* (output) */
+   printf ("xgc4py_f0_param: ptl_mass= %g\n", ptl_mass);
+   printf ("xgc4py_f0_param: sml_e_charge= %g\n", sml_e_charge);
+
+   double *den = (double*) malloc(16395*39*39*sizeof(double));
+   double *u_para = (double*) malloc(16395*39*39*sizeof(double));
+   double *T_perp = (double*) malloc(16395*39*39*sizeof(double));
+   double *T_para = (double*) malloc(16395*39*39*sizeof(double));
+
+   /* Call f0_diag */
+   xgc4py_f0_diag(f0_f_offset, f0_f_ndata, isp,
+               f0_f, f0_f_shap, f0_f_ndim,  /* f0_f data (input) */
+               den, u_para, T_perp, T_para); /* (output) */
+
+   /* Checking */
+   double sum = 0.0;
+   for (int i=0; i<16395*39*39; i++)
+   {
+       sum += den[i];
+   }
+   // Expected value: 493052035.5385171
+   printf ("sum(den): %f\n", sum);
+
+#if 0
+   double *den = (double*) malloc(num_nodes*39*39*sizeof(double));
+   double *u_para = (double*) malloc(num_nodes*39*39*sizeof(double));
+   double *T_perp = (double*) malloc(num_nodes*39*39*sizeof(double));
+   double *T_para = (double*) malloc(num_nodes*39*39*sizeof(double));
+
+   int iphi;
+   for (iphi=0; iphi<num_planes; ++iphi) {
+       for (int i=0; i<num_nodes*39*39; i++) {
+           f0_f[i] = i_f[iphi*num_nodes*39*39 + i];
+       }
+
+       /* Call f0_diag */
+       xgc4py_f0_diag(f0_f_offset, f0_f_ndata, isp,
+           f0_f, f0_f_shap, f0_f_ndim,      /* f0_f data (input) */
+           den, u_para, T_perp, T_para); /* (output) */
+   }
+#endif
+
+   Py_Finalize();
+   exit(1);
+   return;
+}
+#endif
+
 int main(int argc, char** argv)
 {
+    int num_planes = 8;
+    int num_nodes = 16395;
 #if 0
     // Initialize the MPI environment
     MPI_Init(NULL, NULL);
@@ -239,16 +401,36 @@ int main(int argc, char** argv)
     load_npy_file(path, recon, mgard_data_shape);
 
     const char* ipath = "./results/MGARD_Lagrange_expected/v2_1000/MGARD_uniform_raw/MGARD_uniform_4e15.npy";
-    vector<unsigned long> i_data_shape;
-    vector <double> i_f;
-    load_npy_file(ipath, i_f, i_data_shape);
+    // vector<unsigned long> i_data_shape;
+    // vector <double> i_f;
+    // load_npy_file(ipath, i_f, i_data_shape);
 
+    const char* readin_f = "../XGC_2/dataset/d3d_coarse_v2_1000.bp/";
+    adios2::ADIOS ad;
+    adios2::IO reader_io = ad.DeclareIO("XGC");
+    adios2::Engine reader = reader_io.Open(readin_f, adios2::Mode::Read);
+    // Inquire variable
+    adios2::Variable<double> var_i_f_in;
+    var_i_f_in = reader_io.InquireVariable<double>("i_f");
+    std::vector<std::size_t> shape = var_i_f_in.Shape();
+    var_i_f_in.SetSelection(adios2::Box<adios2::Dims>(
+        {0, 0, 0, 0}, {shape[0], shape[1], shape[2], shape[3]}));
+    std::vector<double> i_f;
+    reader.Get<double>(var_i_f_in, i_f);
+    reader.Close();
+    size_t num_elements = shape[0] * shape[1] * shape[2] * shape[3];
+    printf("Read in: %s\n", readin_f);
+    printf(" XGC data shape: (%ld, %ld, %ld, %ld)\n ", shape[0], shape[1],
+           shape[2], shape[3]);
+
+    // compute_qois(num_planes, num_nodes, i_f);
     // get the output of xgcexp.f0_diag_vol_origdim
     double sml_e_charge = 1.6022e-19;
     double ptl_mass = 3.344e-27;
     vector<unsigned long> vol_data_shape;
     vector <double> vol;
     load_npy_file("./vol.npy", vol, vol_data_shape);
+    printf ("%d %d %d\n", vol_data_shape[0], vol_data_shape[1], vol_data_shape[2]);
     vector<unsigned long> vth_data_shape;
     vector <double> vth;
     load_npy_file("./vth.npy", vth, vth_data_shape);
@@ -261,25 +443,49 @@ int main(int argc, char** argv)
     vector<unsigned long> vth2_data_shape;
     vector <double> vth2;
     load_npy_file("./vth2.npy", vth2, vth2_data_shape);
-    vector<unsigned long> f0_grid_vol_data_shape;
-    vector <double> f0_grid_vol;
-    load_npy_file("./f0_grid_vol.npy", f0_grid_vol, f0_grid_vol_data_shape);
-    vector<unsigned long> mu_vp_vol_data_shape;
-    vector <double> mu_vp_vol;
-    load_npy_file("./mu_vp_vol.npy", mu_vp_vol, mu_vp_vol_data_shape);
-    // get the actual QoIs
-    vector<unsigned long> den_f_data_shape;
     vector <double> den_f;
-    load_npy_file("./den_f.npy", den_f, den_f_data_shape);
-    vector<unsigned long> upara_f_data_shape;
     vector <double> upara_f;
-    load_npy_file("./upara_f.npy", upara_f, upara_f_data_shape);
-    vector<unsigned long> tperp_f_data_shape;
     vector <double> tperp_f;
-    load_npy_file("./tperp_f.npy", tperp_f, tperp_f_data_shape);
-    vector<unsigned long> tpara_f_data_shape;
     vector <double> tpara_f;
-    load_npy_file("./tpara_f.npy", tpara_f, tpara_f_data_shape);
+    vector <double> den_f_data;
+    vector <double> upara_f_data;
+    vector <double> tperp_f_data;
+    vector <double> tpara_f_data;
+    vector<unsigned long> den_f_data_shape;
+    load_npy_file("./den_f.npy", den_f_data, den_f_data_shape);
+    vector<unsigned long> upara_f_data_shape;
+    load_npy_file("./upara_f.npy", upara_f_data, upara_f_data_shape);
+    vector<unsigned long> tperp_f_data_shape;
+    load_npy_file("./tperp_f.npy", tperp_f_data, tperp_f_data_shape);
+    vector<unsigned long> tpara_f_data_shape;
+    load_npy_file("./tpara_f.npy", tpara_f_data, tpara_f_data_shape);
+    // get the actual QoIs
+    int iphi,i;
+    for (iphi=0; iphi<num_planes; ++iphi) {
+        compute_C_qois(i_f, iphi, vol, vth, vp, mu_qoi, vth2, ptl_mass, sml_e_charge, den_f, upara_f, tperp_f, tpara_f, den_f_data, upara_f_data, tperp_f_data, tpara_f_data);
+    }
+#if 0
+    for (i=0; i<den_f.size(); ++i) {
+        if (abs(den_f_data[i]-den_f[i]) > 100) {
+            printf("i = %d, data-read = %g, data-computed= %g\n", i, den_f_data[i], den_f[i]);
+        }
+    }
+    for (i=0; i<upara_f.size(); ++i) {
+        if (abs(upara_f_data[i]-upara_f[i]) > 100) {
+            printf("i = %d, data-read = %g, data-computed= %g\n", i, upara_f_data[i], upara_f[i]);
+        }
+    }
+    for (i=0; i<tperp_f.size(); ++i) {
+        if (abs(tperp_f_data[i]-tperp_f[i]) > 100) {
+            printf("i = %d, data-read = %g, data-computed= %g\n", i, tperp_f_data[i], tperp_f[i]);
+        }
+    }
+    for (i=0; i<tpara_f.size(); ++i) {
+        if (abs(tpara_f_data[i]-tpara_f[i]) > 100) {
+            printf("i = %d, data-read = %g, data-computed= %g\n", i, tpara_f_data[i], tpara_f[i]);
+        }
+    }
+#endif
 
     // Assign recon_breg, lagranges
     int count = 0;
@@ -299,7 +505,7 @@ int main(int argc, char** argv)
     vector <double> V3 = qoi_V3(vol, vth2, mu_qoi, ptl_mass);
     vector <double> V4 = qoi_V4(vol, vth2, vp, ptl_mass);
     vector <double> tpara_data;
-    int p, i, idx;
+    int p, idx;
     for (p=0; p<8; ++p) {
         for (i=0; i<ndata; ++i) {
             tpara_data.push_back(sml_e_charge * tpara_f[ndata*p + i] +
