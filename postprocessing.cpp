@@ -1,5 +1,6 @@
 #include <string.h>
 #include <time.h>
+#include <assert.h>
 #include "adios2.h"
 #include "postprocessing.hpp"
 // #define UF_DEBUG 0
@@ -17,6 +18,18 @@ void load_npy_file(const char* path, vector <double> &data,
     return;
 }
 #endif
+
+double rmse_error(vector <double> &x, vector <double> &y)
+{
+    unsigned int xsize = x.size();
+    unsigned int ysize = y.size();
+    assert(xsize == ysize);
+    double e;
+    for (int i=0; i<xsize; ++i) {
+        e += pow((x[i] - y[i]), 2);
+    }
+    return sqrt(e/xsize);
+}
 
 double determinant(double a[4][4], double k);
 double** cofactor(double num[4][4], double f);
@@ -234,6 +247,36 @@ void compute_C_qois(double* i_f, int iphi, int nnodes, int nsize,
         }
         tpara_f.push_back(2.0*value/den_f[den_index + i]/sml_e_charge);
     }
+}
+
+void compare_qois(double* recon_data, double* breg_data, int nphi,
+  int local_nnodes, int vx, vector <double> &vol, vector <double> &vth,
+  vector <double> &vp, vector <double> &mu_qoi, vector <double> &vth2,
+  vector <double> &den_ref, vector <double> &upara_ref,
+  vector <double> &tperp_ref, vector <double> &tpara_ref)
+{
+    vector <double> den_f, upara_f, tperp_f, tpara_f;
+    double ptl_mass, sml_e_charge;
+    int iphi = 0;
+    for (iphi=0; iphi<nphi; ++iphi) {
+        compute_C_qois(recon_data, iphi, local_nnodes, vx, vol, vth, vp, mu_qoi, vth2, ptl_mass, sml_e_charge, den_f, upara_f, tperp_f, tpara_f);
+    }
+    vector <double> den_fg, upara_fg, tperp_fg, tpara_fg;
+    for (iphi=0; iphi<nphi; ++iphi) {
+        compute_C_qois(breg_data, iphi, local_nnodes, vx, vol, vth, vp, mu_qoi, vth2, ptl_mass, sml_e_charge, den_fg, upara_fg, tperp_fg, tpara_fg);
+    }
+    double den_err_b = rmse_error(den_f, den_ref);
+    double den_err_a = rmse_error(den_fg, den_ref);
+    printf ("Density errors %g, %g\n", den_err_b, den_err_a);
+    double upara_err_b = rmse_error(upara_f, upara_ref);
+    double upara_err_a = rmse_error(upara_fg, upara_ref);
+    printf ("Upara errors %g, %g\n", upara_err_b, upara_err_a);
+    double tperp_err_b = rmse_error(tperp_f, tperp_ref);
+    double tperp_err_a = rmse_error(tperp_fg, tperp_ref);
+    printf ("Tperp errors %g, %g\n", tperp_err_b, tperp_err_a);
+    double tpara_err_b = rmse_error(tpara_f, tpara_ref);
+    double tpara_err_a = rmse_error(tpara_fg, tpara_ref);
+    printf ("Tpara errors %g, %g\n", tpara_err_b, tpara_err_a);
 }
 
 char* getDataPath(const char* filepath)
@@ -709,5 +752,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
             }
         }
     }
+    compare_qois(recon, breg_recon, nphi, local_nnodes, vx, vol,
+        vth, vp, mu_qoi, vth2, den_f, upara_f, tperp_f, tpara_f);
     return lagranges;
 }
