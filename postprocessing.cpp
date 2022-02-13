@@ -301,7 +301,7 @@ vector <double> qoi_V4(vector <double> &vol, vector <double> &vth2,
     return V4;
 }
 
-vector<double> compute_lagrange_parameters(const char* filepath, double* recon, int local_elements, int local_nnodes, double* i_f, int nphi, int nnodes, int vx, int vy, int offset,  double* breg_recon, double &pd_error_b, double &pd_error_a, double &density_error_b, double &density_error_a, double &upara_error_b, double &upara_error_a, double &tperp_error_b, double &tperp_error_a, double &tpara_error_b, double &tpara_error_a)
+vector<double> compute_lagrange_parameters(const char* filepath, double* recon, int local_elements, int local_nnodes, double* i_f, int nphi, int nnodes, int vx, int vy, int offset, double maxv, double* &breg_recon, double &pd_error_b, double &pd_error_a, double &density_error_b, double &density_error_a, double &upara_error_b, double &upara_error_a, double &tperp_error_b, double &tperp_error_a, double &tpara_error_b, double &tpara_error_a)
 {
     // Remove non-negative values from input
     clock_t start = clock();
@@ -537,6 +537,8 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
         double UeB = pow(maxU*1e-09, 2);
         double TperpEB = pow(maxTperp*1e-09, 2);
         double TparaEB = pow(maxTpara*1e-09, 2);
+        double PDeB = pow(maxv*1e-09, 2);
+        double* f0_f = &i_f[iphi*local_nnodes*vx*vy];
         for (idx=0; idx<local_nnodes; ++idx) {
             double* recon_one = &recon[local_nnodes*vx*vy*iphi + vx*vy*idx];
             double lambdas[4] = {0.0, 0.0, 0.0, 0.0};
@@ -544,6 +546,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
             vector <double> L2_upara;
             vector <double> L2_tperp;
             vector <double> L2_tpara;
+            vector <double> L2_PD;
             count = 0;
             double aD = D[idx]*sml_e_charge;
             while (1) {
@@ -556,7 +559,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
 #ifdef UF_DEBUG
                 printf("L1 %g, L2 %g L3 %g, L4 %g K[0] %g\n", lambdas[0], lambdas[1], lambdas[2], lambdas[3], exp(-K[0]));
 #endif
-                double update_D=0, update_U=0, update_Tperp=0, update_Tpara=0;
+                double update_D=0, update_U=0, update_Tperp=0, update_Tpara=0, rmse_pd=0;
                 if (count > 0) {
                     for (i=0; i<vx*vy; ++i) {
                         breg_result[i] = recon_one[i]*
@@ -569,11 +572,13 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                             vx*vy*idx + i]/aD;
                         update_Tpara += breg_result[i]*V4[
                             vx*vy*idx + i]/D[idx];
+                        rmse_pd += pow((breg_result[i] - f0_f[vx*vy*idx]), 2);
                     }
                     L2_den.push_back(pow((update_D - D[idx]), 2));
                     L2_upara.push_back(pow((update_U - U[idx]), 2));
                     L2_tperp.push_back(pow((update_Tperp-Tperp[idx]), 2));
                     L2_tpara.push_back(pow((update_Tpara-Tpara[idx]), 2));
+                    L2_PD.push_back(sqrt(rmse_pd));
 #ifdef UF_DEBUG
                     printf ("L2_den %g, %g\n", update_D, D[idx]);
 #endif
@@ -581,7 +586,8 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                     bool converged = (isConverged(L2_den, DeB)
                         && isConverged(L2_upara, UeB)
                         && isConverged(L2_tpara, TparaEB)
-                        && isConverged(L2_tperp, TperpEB));
+                        && isConverged(L2_tperp, TperpEB))
+                        && isConverged(L2_PD, PDeB);
                     if (converged) {
                         for (i=0; i<vx*vy; ++i) {
                             recon_breg.push_back(breg_result[i]);
@@ -704,5 +710,6 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
             }
         }
     }
+    breg_recon = recon_breg.data();
     return lagranges;
 }

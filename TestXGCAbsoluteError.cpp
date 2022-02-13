@@ -187,8 +187,8 @@ int main(int argc, char *argv[]) {
     double tpara_error_b, tpara_error_a;
 
     std::vector <double> lagranges = compute_lagrange_parameters(infile,
-         mgard_out_buff, local_elements, local_nnodes, in_buff, nphi, nnodes, 
-         vx, vy, offset, modified_out_buff, pd_error_b,
+         mgard_out_buff, local_elements, local_nnodes, in_buff, nphi,
+         nnodes, vx, vy, offset, maxv, modified_out_buff, pd_error_b,
          pd_error_a, density_error_b, density_error_s, upara_error_b,
          upara_error_a, tperp_error_b, tperp_error_a, tpara_error_b,
          tpara_error_a);
