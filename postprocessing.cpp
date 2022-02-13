@@ -65,8 +65,8 @@ void set_vth2(vector <double> &f0_T_ev, double nnodes, double sml_e_charge, doub
     return;
 }
 
-void read_f0_params(const char* datapath, double* i_f,
-    int nnodes, int nphi, int nsize, vector <double> &vol,
+void read_f0_params(const char* datapath, unsigned long nnodes,
+    unsigned long offset, int nphi, int nsize, vector <double> &vol,
     vector <double> &vth, vector <double> &vp, vector <double> &mu_qoi,
     vector <double> &vth2, double &sml_e_charge, double &ptl_mass)
 {
@@ -82,7 +82,7 @@ void read_f0_params(const char* datapath, double* i_f,
     adios2::Variable<double> var_i_f_in;
     var_i_f_in = read_vol_io.InquireVariable<double>("f0_grid_vol_vonly");
     vector<std::size_t> vol_shape = var_i_f_in.Shape();
-    var_i_f_in.SetSelection(adios2::Box<adios2::Dims>({0, 0}, {vol_shape[0], vol_shape[1]}));
+    var_i_f_in.SetSelection(adios2::Box<adios2::Dims>({0, offset}, {vol_shape[0], nnodes}));
     std::vector<double> grid_vol;
     reader_vol.Get<double>(var_i_f_in, grid_vol);
 
@@ -107,14 +107,16 @@ void read_f0_params(const char* datapath, double* i_f,
 
     var_i_f_in = read_vol_io.InquireVariable<double>("f0_T_ev");
     vector<std::size_t> ev_shape = var_i_f_in.Shape();
-    var_i_f_in.SetSelection(adios2::Box<adios2::Dims>({0, 0}, {ev_shape[0], ev_shape[1]}));
+    var_i_f_in.SetSelection(adios2::Box<adios2::Dims>({0, offset}, {ev_shape[0], nnodes}));
     std::vector<double> f0_T_ev;
     reader_vol.Get<double>(var_i_f_in, f0_T_ev);
+    reader_vol.Close();
 
     set_vol(grid_vol, f0_nvp[0], f0_nmu[0], nnodes, vol);
     set_vp(f0_nvp[0], f0_dvp[0], vp);
     set_mu_qoi(f0_nmu[0], f0_dsmu[0], mu_qoi);
     set_vth2(f0_T_ev, nnodes, sml_e_charge, ptl_mass, vth2, vth);
+    printf ("vol %d, vp %d, mu_qoi %d, vth2 %d\n", vol.size(), vp.size(), mu_qoi.size(), vth.size());
 }
 
 bool isConverged(vector <double> difflist, double eB)
@@ -147,6 +149,7 @@ void compute_C_qois(double* i_f, int iphi, int nnodes, int nsize,
     vector <double> T_par;
     int i, j, k;
     double* f0_f = &i_f[iphi*nnodes*nsize*nsize];
+    printf("f0[0] %g, f0[1] %g, i_f[index] %g, i_f[index+1] %g\n", f0_f[0], f0_f[1], i_f[iphi*nnodes*nsize*nsize], i_f[iphi*nnodes*nsize*nsize+1]);
     int den_index = iphi*nnodes;
 
     for (i=0; i<nnodes*nsize*nsize; ++i) {
@@ -180,10 +183,11 @@ void compute_C_qois(double* i_f, int iphi, int nnodes, int nsize,
     }
     for (i=0; i<nnodes; ++i) {
         for (j=0; j<nsize; ++j)
-            for (k=0; k<nsize; ++k)
+            for (k=0; k<nsize; ++k) {
                 tper.push_back(f0_f[nsize*nsize*i + nsize*j + k] *
                     vol[nsize*nsize*i + nsize*j + k] * 0.5 *
                     mu_qoi[j] * vth2[i] * ptl_mass);
+            }
     }
     for (i=0; i<nnodes; ++i) {
         double value = 0;
@@ -191,6 +195,7 @@ void compute_C_qois(double* i_f, int iphi, int nnodes, int nsize,
             value += tper[nsize*nsize*i + j];
         }
         tperp_f.push_back(value/den_f[den_index + i]/sml_e_charge);
+        // printf ("Tperp %g, %g, %g, %g\n", value/den_f[den_index + i]/sml_e_charge, value, ptl_mass, sml_e_charge);
     }
     for (i=0; i<nnodes; ++i) {
         for (j=0; j<nsize; ++j)
@@ -294,7 +299,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
     char* datapath = getDataPath(filepath);
 
     // Revisit for precise params
-    read_f0_params (datapath, i_f, nnodes, nphi, vx, vol, vth, vp,
+    read_f0_params (datapath, local_nnodes, offset, nphi, vx, vol, vth, vp,
         mu_qoi, vth2, sml_e_charge, ptl_mass);
 
     vector <double> den_f, upara_f, tperp_f, tpara_f;
@@ -302,6 +307,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
     for (iphi=0; iphi<nphi; ++iphi) {
         compute_C_qois(i_f, iphi, local_nnodes, vx, vol, vth, vp, mu_qoi, vth2, ptl_mass, sml_e_charge, den_f, upara_f, tperp_f, tpara_f);
     }
+    printf ("den_f %d, upara_f %d, tperp_f %d, tpara_f %d\n", den_f.size(), upara_f.size(), tperp_f.size(), tpara_f.size());
 
     vector <double> lagranges;
 #if 0
@@ -315,31 +321,32 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
     double K[vx*vy];
     double breg_result[vx*vy];
     memset(K, 0, vx*vy*sizeof(double));
-    vector <double> V2 = qoi_V2(vol, vth, vp, nnodes, vx);
-    vector <double> V3 = qoi_V3(vol, vth2, mu_qoi, ptl_mass, nnodes, vx);
-    vector <double> V4 = qoi_V4(vol, vth2, vp, ptl_mass, nnodes, vx);
+    vector <double> V2 = qoi_V2(vol, vth, vp, local_nnodes, vx);
+    vector <double> V3 = qoi_V3(vol, vth2, mu_qoi, ptl_mass, local_nnodes, vx);
+    vector <double> V4 = qoi_V4(vol, vth2, vp, ptl_mass, local_nnodes, vx);
     vector <double> tpara_data;
-    int p, idx, i;
-    for (p=0; p<8; ++p) {
-        for (i=0; i<nnodes; ++i) {
-            tpara_data.push_back(sml_e_charge * tpara_f[nnodes*p + i] +
-                vth2[i] * ptl_mass * pow((upara_f[nnodes*p + i]/vth[i]), 2));
+    int idx, i;
+    for (iphi=0; iphi<nphi; ++iphi) {
+        for (i=0; i<local_nnodes; ++i) {
+            tpara_data.push_back(sml_e_charge * tpara_f[local_nnodes*iphi + i] +
+                vth2[i] * ptl_mass * pow((upara_f[local_nnodes*iphi + i]/vth[i]), 2));
         }
     }
+    printf ("V2 %g, V3 %g, V4 %g, tpara %g\n", V2[0], V3[0], V4[0], tpara_data[0]);
     // compare vectors V2, V3, V4, and Tpara
     start = clock();
-    for (p=0; p<8; ++p) {
-        double* D = &den_f[p*nnodes];
-        double* U = &upara_f[p*nnodes];
-        double* Tperp = &tperp_f[p*nnodes];
-        double* Tpara = &tpara_data[p*nnodes];
+    for (iphi=0; iphi<nphi; ++iphi) {
+        double* D = &den_f[iphi*local_nnodes];
+        double* U = &upara_f[iphi*local_nnodes];
+        double* Tperp = &tperp_f[iphi*local_nnodes];
+        double* Tpara = &tpara_data[iphi*local_nnodes];
         int count_unLag = 0;
         vector <int> node_unconv;
         double maxD = -99999;
         double maxU = -99999;
         double maxTperp = -99999;
         double maxTpara = -99999;
-        for (i=0; i<nnodes; ++i) {
+        for (i=0; i<local_nnodes; ++i) {
             if (D[i] > maxD) {
                 maxD = D[i];
             }
@@ -357,8 +364,9 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
         double UeB = pow(maxU*1e-09, 2);
         double TperpEB = pow(maxTperp*1e-09, 2);
         double TparaEB = pow(maxTpara*1e-09, 2);
-        for (idx=0; idx<nnodes; ++idx) {
-            double* recon_one = &recon[nnodes*vx*vy*p + vx*vy*idx];
+        // for (idx=0; idx<local_nnodes; ++idx)
+        for (idx=0; idx<1; ++idx) {
+            double* recon_one = &recon[local_nnodes*vx*vy*iphi + vx*vy*idx];
             double lambdas[4] = {0.0, 0.0, 0.0, 0.0};
             vector <double> L2_den;
             vector <double> L2_upara;
@@ -373,6 +381,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                            lambdas[2]*V3[vx*vy*idx + i] +
                            lambdas[3]*V4[vx*vy*idx + i];
                 }
+                printf("L1 %g, L2 %g L3 %g, L4 %g K[0] %g\n", lambdas[0], lambdas[1], lambdas[2], lambdas[3], exp(-K[0]));
                 double update_D=0, update_U=0, update_Tperp=0, update_Tpara=0;
                 if (count > 0) {
                     for (i=0; i<vx*vy; ++i) {
@@ -391,10 +400,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                     L2_upara.push_back(pow((update_U - U[idx]), 2));
                     L2_tperp.push_back(pow((update_Tperp-Tperp[idx]), 2));
                     L2_tpara.push_back(pow((update_Tpara-Tpara[idx]), 2));
-                    // L2_den.push_back(update_D);
-                    // L2_upara.push_back(update_U);
-                    // L2_tperp.push_back(update_Tperp);
-                    // L2_tpara.push_back(update_Tpara);
+                    printf ("L2_den %g, %g\n", update_D, D[idx]);
                     bool c1, c2, c3, c4;
                     bool converged = (isConverged(L2_den, DeB)
                         && isConverged(L2_upara, UeB)
@@ -413,7 +419,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                         }
                         break;
                     }
-                    else if (count == 20 && !converged) {
+                    else if (count == 2 && !converged) {
                         for (i=0; i<vx*vy; ++i) {
                             recon_breg.push_back(recon_one[i]);
                         }
@@ -433,13 +439,6 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                 double hvalue5 = 0, hvalue6 = 0, hvalue7 = 0;
                 double hvalue8 = 0, hvalue9 = 0, hvalue10 = 0;
 
-#if 0
-                for (i=0; i<2*vx; ++i) {
-                    gvalue3 += recon_one[i]*
-                          V3[vx*vy*idx + i]*exp(-K[i])*-1.0;
-                    printf ("i=%d, gvalue = %g, recon = %g, vol = %g, exp = %g, den = %g\n", i, gvalue3, recon_one[i], V3[vx*vy*idx + i], exp(-K[i]),  Tperp[idx]*aD);
-                }
-#endif
                 for (i=0; i<vx*vy; ++i) {
                     gvalue1 += recon_one[i]*vol[vx*vy*idx + i]*
                       exp(-K[i])*-1.0;
@@ -481,6 +480,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                 gradients[1] = gvalue2;
                 gradients[2] = gvalue3;
                 gradients[3] = gvalue4;
+                printf("Gradients: %g, %g, %g, %g\n", gradients[0], gradients[1], gradients[2], gradients[3]);
                 hessians[0][0] = hvalue1;
                 hessians[0][1] = hvalue2;
                 hessians[0][2] = hvalue3;
@@ -506,6 +506,8 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                 }
                 else{
                     double** inverse = cofactor(hessians, order);
+                    printf("Hessians: %g, %g, %g, %g\n", hessians[0][0], hessians[0][1], hessians[0][2], hessians[0][3]);
+                    printf("Inverse: %g, %g, %g, %g\n", inverse[0][0], inverse[0][1], inverse[0][2], inverse[0][3]);
                     double matmul[4] = {0, 0, 0, 0};
                     for (i=0; i<4; ++i) {
                         matmul[i] = 0;
