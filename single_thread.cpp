@@ -18,6 +18,7 @@
 
 #include "adios2.h"
 #include "mgard/compress_cuda.hpp"
+#include "postprocessing.hpp"
 
 #define ANSI_RED "\x1b[31m"
 #define ANSI_GREEN "\x1b[32m"
@@ -72,19 +73,21 @@ int main(int argc, char *argv[]) {
   }
   mgard_cuda::SIZE vx = var_i_f_in.Shape()[2];
   mgard_cuda::SIZE vy = var_i_f_in.Shape()[3];
-  mgard_cuda::SIZE nnodes = 3;
+  mgard_cuda::SIZE nnodes = var_i_f_in.Shape()[1];
+  mgard_cuda::SIZE local_nnodes = 3;
   mgard_cuda::SIZE nphi = var_i_f_in.Shape()[0];
-  size_t gb_elements = nphi * vx * nnodes * vy;
-  size_t local_elements = nphi * vx * nnodes * vy;
+  mgard_cuda::SIZE offset = 3;
+  size_t gb_elements = nphi * vx * local_nnodes * vy;
+  size_t local_elements = nphi * vx * local_nnodes * vy;
   size_t lSize = sizeof(double) * gb_elements;
   double *in_buff;
   mgard_cuda::cudaMallocHostHelper((void **)&in_buff,
                                    sizeof(double) * local_elements);
   size_t out_size = 0;
-    std::vector<mgard_cuda::SIZE> shape = {nphi, nnodes, vx, vy};
+    std::vector<mgard_cuda::SIZE> shape = {nphi, local_nnodes, vx, vy};
     var_i_f_in.SetSelection(adios2::Box<adios2::Dims>(
-        {0, 0, 0, 0},
-        {nphi, nnodes, vx, vy}));
+        {0, 3, 0, 0},
+        {nphi, local_nnodes, vx, vy}));
     reader.Get<double>(var_i_f_in, in_buff);
     reader.PerformGets();
 
@@ -110,8 +113,20 @@ int main(int argc, char *argv[]) {
     mgard_cuda::Array<4, double> out_array =
         mgard_cuda::decompress(handle, compressed_array);
     mgard_out_buff = new double[local_elements];
+    double* modified_out_buff = new double[local_elements];
     memcpy(mgard_out_buff, out_array.getDataHost(),
            local_elements * sizeof(double));
+
+    double pd_error_b, pd_error_a, density_error_b, density_error_s;
+    double upara_error_b, upara_error_a, tperp_error_b, tperp_error_a;
+    double tpara_error_b, tpara_error_a;
+
+    std::vector <double> lagranges = compute_lagrange_parameters(infile,
+         mgard_out_buff, local_elements, local_nnodes, in_buff, nphi, nnodes,
+         vx, vy, offset, modified_out_buff, pd_error_b,
+         pd_error_a, density_error_b, density_error_s, upara_error_b,
+         upara_error_a, tperp_error_b, tperp_error_a, tpara_error_b,
+         tpara_error_a);
 
     double error_L_inf_norm = 0;
     for (int i = 0; i < local_elements; ++i) {

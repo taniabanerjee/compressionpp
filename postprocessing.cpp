@@ -2,6 +2,21 @@
 #include <time.h>
 #include "adios2.h"
 #include "postprocessing.hpp"
+// #define UF_DEBUG 0
+
+#ifdef UF_DEBUG
+#include "npy.hpp"
+void load_npy_file(const char* path, vector <double> &data,
+    vector<unsigned long> &shape)
+{
+    bool fortran_order;
+    npy::LoadArrayFromNumpy(path, shape, fortran_order, data);
+    // for (size_t i = 0; i<data.size(); i++)
+        // cout << data[i] << "\n";
+    // cout << endl << endl;
+    return;
+}
+#endif
 
 double determinant(double a[4][4], double k);
 double** cofactor(double num[4][4], double f);
@@ -116,7 +131,9 @@ void read_f0_params(const char* datapath, unsigned long nnodes,
     set_vp(f0_nvp[0], f0_dvp[0], vp);
     set_mu_qoi(f0_nmu[0], f0_dsmu[0], mu_qoi);
     set_vth2(f0_T_ev, nnodes, sml_e_charge, ptl_mass, vth2, vth);
+#ifdef UF_DEBUG
     printf ("vol %d, vp %d, mu_qoi %d, vth2 %d\n", vol.size(), vp.size(), mu_qoi.size(), vth.size());
+#endif
 }
 
 bool isConverged(vector <double> difflist, double eB)
@@ -149,11 +166,13 @@ void compute_C_qois(double* i_f, int iphi, int nnodes, int nsize,
     vector <double> T_par;
     int i, j, k;
     double* f0_f = &i_f[iphi*nnodes*nsize*nsize];
+#ifdef UF_DEBUG
     printf("f0[0] %g, f0[1] %g, i_f[index] %g, i_f[index+1] %g\n", f0_f[0], f0_f[1], i_f[iphi*nnodes*nsize*nsize], i_f[iphi*nnodes*nsize*nsize+1]);
+#endif
     int den_index = iphi*nnodes;
 
     for (i=0; i<nnodes*nsize*nsize; ++i) {
-        den.push_back(f0_f[i] / vol[i]);
+        den.push_back(f0_f[i] * vol[i]);
     }
 
     double value = 0;
@@ -235,7 +254,7 @@ char* getDataPath(const char* filepath)
 }
 
 vector <double> qoi_V2(vector <double> &vol, vector <double> &vth,
-    vector <double> &vp, int nnodes, int nsize)
+    vector <double> &vp, int nnodes, int nsize, int offset)
 {
     int i, j, k;
     vector <double> V2;
@@ -286,7 +305,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
 {
     // Remove non-negative values from input
     clock_t start = clock();
-    int ii;
+    int ii, i, j, k;
     for (ii=0; ii<local_elements; ++ii) {
         if (!(recon[ii] > 0)) {
             recon[ii] = 100;
@@ -302,15 +321,111 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
     read_f0_params (datapath, local_nnodes, offset, nphi, vx, vol, vth, vp,
         mu_qoi, vth2, sml_e_charge, ptl_mass);
 
+#ifdef UF_DEBUG 
+    // Verify vol numbers
+    vector <double> vol_f;
+    vector<unsigned long> vol_data_shape;
+    load_npy_file("./vol.npy", vol_f, vol_data_shape);
+    double* vol_ref = new double[local_nnodes*vx*vy];
+    k = 0;
+    for (i=offset*vx*vy; i<(offset+local_nnodes)*vx*vy; i++) {
+        vol_ref[k++] = vol_f[i];
+    }
+    for (i=0; i<vol.size(); ++i) {
+        if (abs(vol[i]-vol_ref[i]) > 10) {
+            printf("i = %d, data-read = %g, data-computed= %g\n", i, vol[i], vol_ref[i]);
+        }
+    }
+    // Verify vth numbers
+    vector <double> vth_f;
+    vector<unsigned long> vth_data_shape;
+    load_npy_file("./vth.npy", vth_f, vth_data_shape);
+    double* vth_ref = new double[local_nnodes];
+    k = 0;
+    for (i=offset; i<(offset+local_nnodes); i++) {
+        vth_ref[k++] = vth_f[i];
+    }
+    for (i=0; i<vth.size(); ++i) {
+        if (abs(vth[i]-vth_ref[i]) > 10) {
+            printf("i = %d, data-read = %g, data-computed= %g\n", i, vth[i], vth_ref[i]);
+        }
+    }
+#endif
+
     vector <double> den_f, upara_f, tperp_f, tpara_f;
     int iphi = 0;
     for (iphi=0; iphi<nphi; ++iphi) {
         compute_C_qois(i_f, iphi, local_nnodes, vx, vol, vth, vp, mu_qoi, vth2, ptl_mass, sml_e_charge, den_f, upara_f, tperp_f, tpara_f);
     }
+#ifdef UF_DEBUG
     printf ("den_f %d, upara_f %d, tperp_f %d, tpara_f %d\n", den_f.size(), upara_f.size(), tperp_f.size(), tpara_f.size());
+    // Verify density numbers
+    vector <double> den_f_data;
+    vector<unsigned long> den_f_data_shape;
+    load_npy_file("./den_f.npy", den_f_data, den_f_data_shape);
+    double* den_ref = new double[nphi*local_nnodes];
+    k = 0;
+    for (i=0; i<den_f_data.size(); i+=16395) {
+        for (j=0; j<local_nnodes; ++j) {
+            den_ref[k++] = den_f_data[i+j+offset];
+        }
+    }
+    for (i=0; i<den_f.size(); ++i) {
+        if (abs(den_f[i]-den_ref[i]) > 1e+13) {
+            printf("i = %d, data-read = %g, data-computed= %g\n", i, den_ref[i], den_f[i]);
+        }
+    }
+    // Verify upara numbers
+    vector <double> upara_f_data;
+    vector<unsigned long> upara_f_data_shape;
+    load_npy_file("./upara_f.npy", upara_f_data, upara_f_data_shape);
+    double* upara_ref = new double[nphi*local_nnodes];
+    k = 0;
+    for (i=0; i<upara_f_data.size(); i+=16395) {
+        for (j=0; j<local_nnodes; ++j) {
+            upara_ref[k++] = upara_f_data[i+j+offset];
+        }
+    }
+    for (i=0; i<upara_f.size(); ++i) {
+        if (abs(upara_f[i]-upara_ref[i]) > 100) {
+            printf("i = %d, data-read = %g, data-computed= %g\n", i, upara_ref[i], upara_f[i]);
+        }
+    }
+    // Verify Tperp numbers
+    vector <double> tperp_f_data;
+    vector<unsigned long> tperp_f_data_shape;
+    load_npy_file("./tperp_f.npy", tperp_f_data, tperp_f_data_shape);
+    double* tperp_ref = new double[nphi*local_nnodes];
+    k = 0;
+    for (i=0; i<tperp_f_data.size(); i+=16395) {
+        for (j=0; j<local_nnodes; ++j) {
+            tperp_ref[k++] = tperp_f_data[i+j+offset];
+        }
+    }
+    for (i=0; i<tperp_f.size(); ++i) {
+        if (abs(tperp_f[i]-tperp_ref[i]) > 100) {
+            printf("i = %d, data-read = %g, data-computed= %g\n", i, tperp_ref[i], tperp_f[i]);
+        }
+    }
+    // Verify Tpara numbers
+    vector <double> tpara_f_data;
+    vector<unsigned long> tpara_f_data_shape;
+    load_npy_file("./tpara_f.npy", tpara_f_data, tpara_f_data_shape);
+    double* tpara_ref = new double[nphi*local_nnodes];
+    k = 0;
+    for (i=0; i<tpara_f_data.size(); i+=16395) {
+        for (j=0; j<local_nnodes; ++j) {
+            tpara_ref[k++] = tpara_f_data[i+j+offset];
+        }
+    }
+    for (i=0; i<tpara_f.size(); ++i) {
+        if (abs(tpara_f[i]-tpara_ref[i]) > 100) {
+            printf("i = %d, data-read = %g, data-computed= %g\n", i, tpara_ref[i], tpara_f[i]);
+        }
+    }
+#endif
 
     vector <double> lagranges;
-#if 0
     int count = 0;
     vector <double> recon_breg;
     double gradients[4] = {0.0, 0.0, 0.0, 0.0};
@@ -321,18 +436,76 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
     double K[vx*vy];
     double breg_result[vx*vy];
     memset(K, 0, vx*vy*sizeof(double));
-    vector <double> V2 = qoi_V2(vol, vth, vp, local_nnodes, vx);
+    vector <double> V2 = qoi_V2(vol, vth, vp, local_nnodes, vx, offset);
     vector <double> V3 = qoi_V3(vol, vth2, mu_qoi, ptl_mass, local_nnodes, vx);
     vector <double> V4 = qoi_V4(vol, vth2, vp, ptl_mass, local_nnodes, vx);
     vector <double> tpara_data;
-    int idx, i;
+    int idx;
     for (iphi=0; iphi<nphi; ++iphi) {
         for (i=0; i<local_nnodes; ++i) {
             tpara_data.push_back(sml_e_charge * tpara_f[local_nnodes*iphi + i] +
                 vth2[i] * ptl_mass * pow((upara_f[local_nnodes*iphi + i]/vth[i]), 2));
         }
     }
+#ifdef UF_DEBUG
+    // Verify V2 numbers
+    vector <double> V2_data;
+    vector<unsigned long> V2_data_shape;
+    load_npy_file("./V2.npy", V2_data, V2_data_shape);
+    double* V2_ref = new double[local_nnodes*vx*vy];
+    k = 0;
+    for (i=offset*vx*vy; i<(offset+local_nnodes)*vx*vy; i++) {
+        V2_ref[k++] = V2_data[i];
+    }
+    for (i=0; i<V2.size(); ++i) {
+        if (abs(V2[i]-V2_ref[i]) > 100) {
+            printf("i = %d, data-read = %g, data-computed= %g\n", i, V2_ref[i], V2[i]);
+        }
+    }
+    // Verify V3 numbers
+    vector <double> V3_data;
+    vector<unsigned long> V3_data_shape;
+    load_npy_file("./V3.npy", V3_data, V3_data_shape);
+    double* V3_ref = new double[local_nnodes*vx*vy];
+    k = 0;
+    for (i=offset*vx*vy; i<(offset+local_nnodes)*vx*vy; i++) {
+        V3_ref[k++] = V3_data[i];
+    }
+    for (i=0; i<V3.size(); ++i) {
+        if (abs(V3[i]-V3_ref[i]) > 100) {
+            printf("i = %d, data-read = %g, data-computed= %g\n", i, V3_ref[i], V3[i]);
+        }
+    }
+    // Verify V4 numbers
+    vector <double> V4_data;
+    vector<unsigned long> V4_data_shape;
+    load_npy_file("./V4.npy", V4_data, V4_data_shape);
+    double* V4_ref = new double[local_nnodes*vx*vy];
+    k = 0;
+    for (i=offset*vx*vy; i<(offset+local_nnodes)*vx*vy; i++) {
+        V4_ref[k++] = V4_data[i];
+    }
+    for (i=0; i<V4.size(); ++i) {
+        if (abs(V4[i]-V4_ref[i]) > 100) {
+            printf("i = %d, data-read = %g, data-computed= %g\n", i, V4_ref[i], V4[i]);
+        }
+    }
+    // Verify Tpara numbers
+    vector <double> Tpara_data;
+    vector<unsigned long> Tpara_data_shape;
+    load_npy_file("./Tpara.npy", Tpara_data, Tpara_data_shape);
+    double* Tpara_ref = new double[local_nnodes*vx*vy];
+    k = 0;
+    for (i=offset*vx*vy; i<(offset+local_nnodes)*vx*vy; i++) {
+        Tpara_ref[k++] = Tpara_data[i];
+    }
+    for (i=0; i<tpara_data.size(); ++i) {
+        if (abs(tpara_data[i]-Tpara_ref[i]) > 100) {
+            printf("i = %d, data-read = %g, data-computed= %g\n", i, Tpara_ref[i], tpara_data[i]);
+        }
+    }
     printf ("V2 %g, V3 %g, V4 %g, tpara %g\n", V2[0], V3[0], V4[0], tpara_data[0]);
+#endif
     // compare vectors V2, V3, V4, and Tpara
     start = clock();
     for (iphi=0; iphi<nphi; ++iphi) {
@@ -364,8 +537,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
         double UeB = pow(maxU*1e-09, 2);
         double TperpEB = pow(maxTperp*1e-09, 2);
         double TparaEB = pow(maxTpara*1e-09, 2);
-        // for (idx=0; idx<local_nnodes; ++idx)
-        for (idx=0; idx<1; ++idx) {
+        for (idx=0; idx<local_nnodes; ++idx) {
             double* recon_one = &recon[local_nnodes*vx*vy*iphi + vx*vy*idx];
             double lambdas[4] = {0.0, 0.0, 0.0, 0.0};
             vector <double> L2_den;
@@ -381,7 +553,9 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                            lambdas[2]*V3[vx*vy*idx + i] +
                            lambdas[3]*V4[vx*vy*idx + i];
                 }
+#ifdef UF_DEBUG
                 printf("L1 %g, L2 %g L3 %g, L4 %g K[0] %g\n", lambdas[0], lambdas[1], lambdas[2], lambdas[3], exp(-K[0]));
+#endif
                 double update_D=0, update_U=0, update_Tperp=0, update_Tpara=0;
                 if (count > 0) {
                     for (i=0; i<vx*vy; ++i) {
@@ -400,7 +574,9 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                     L2_upara.push_back(pow((update_U - U[idx]), 2));
                     L2_tperp.push_back(pow((update_Tperp-Tperp[idx]), 2));
                     L2_tpara.push_back(pow((update_Tpara-Tpara[idx]), 2));
+#ifdef UF_DEBUG
                     printf ("L2_den %g, %g\n", update_D, D[idx]);
+#endif
                     bool c1, c2, c3, c4;
                     bool converged = (isConverged(L2_den, DeB)
                         && isConverged(L2_upara, UeB)
@@ -419,7 +595,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                         }
                         break;
                     }
-                    else if (count == 2 && !converged) {
+                    else if (count == 20 && !converged) {
                         for (i=0; i<vx*vy; ++i) {
                             recon_breg.push_back(recon_one[i]);
                         }
@@ -480,7 +656,9 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                 gradients[1] = gvalue2;
                 gradients[2] = gvalue3;
                 gradients[3] = gvalue4;
+#ifdef UF_DEBUG
                 printf("Gradients: %g, %g, %g, %g\n", gradients[0], gradients[1], gradients[2], gradients[3]);
+#endif
                 hessians[0][0] = hvalue1;
                 hessians[0][1] = hvalue2;
                 hessians[0][2] = hvalue3;
@@ -506,8 +684,10 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                 }
                 else{
                     double** inverse = cofactor(hessians, order);
+#if UF_DEBUG
                     printf("Hessians: %g, %g, %g, %g\n", hessians[0][0], hessians[0][1], hessians[0][2], hessians[0][3]);
                     printf("Inverse: %g, %g, %g, %g\n", inverse[0][0], inverse[0][1], inverse[0][2], inverse[0][3]);
+#endif
                     double matmul[4] = {0, 0, 0, 0};
                     for (i=0; i<4; ++i) {
                         matmul[i] = 0;
@@ -524,6 +704,5 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
             }
         }
     }
-#endif
     return lagranges;
 }
