@@ -24,7 +24,7 @@ double rmse_error(vector <double> &x, vector <double> &y)
     unsigned int xsize = x.size();
     unsigned int ysize = y.size();
     assert(xsize == ysize);
-    double e;
+    double e = 0;
     for (int i=0; i<xsize; ++i) {
         e += pow((x[i] - y[i]), 2);
     }
@@ -249,14 +249,77 @@ void compute_C_qois(double* i_f, int iphi, int nnodes, int nsize,
     }
 }
 
+void read_xgc_file(const char* filepath, vector <double> &i_f, int &nnodes, int &nphi, int &nsize)
+{
+    adios2::ADIOS ad;
+    adios2::IO reader_io = ad.DeclareIO("XGC");
+    adios2::Engine reader = reader_io.Open(filepath, adios2::Mode::Read);
+    // Inquire variable
+    adios2::Variable<double> var_i_f_in;
+    var_i_f_in = reader_io.InquireVariable<double>("i_f");
+    std::vector<std::size_t> shape = var_i_f_in.Shape();
+    var_i_f_in.SetSelection(adios2::Box<adios2::Dims>(
+        {0, 0, 0, 0}, {shape[0], shape[1], shape[2], shape[3]}));
+    reader.Get<double>(var_i_f_in, i_f);
+    reader.Close();
+    nphi = shape[0];
+    nnodes = shape[1];
+    nsize = shape[2];
+    size_t num_elements = shape[0] * shape[1] * shape[2] * shape[3];
+    printf("Read in: %s\n", filepath);
+    printf(" XGC data shape: (%ld, %ld, %ld, %ld)\n ", shape[0], shape[1],
+           shape[2], shape[3]);
+    return;
+}
+
+void compare_qois_full(const char* datapath, const char* xgcpath,
+    double* recon_data, double* breg_data)
+{
+    vector <double> i_f;
+    int nnodes, nphi, vx;
+    read_xgc_file(xgcpath, i_f, nnodes, nphi, vx);
+
+    vector <double> vol, vth, vth2, vp, mu_qoi;
+    double ptl_mass, sml_e_charge;
+    read_f0_params (datapath, nnodes, 0, nphi, vx, vol, vth, vp,
+        mu_qoi, vth2, sml_e_charge, ptl_mass);
+
+    int iphi = 0;
+    vector <double> den_ref, upara_ref, tperp_ref, tpara_ref;
+    for (iphi=0; iphi<nphi; ++iphi) {
+        compute_C_qois(i_f.data(), iphi, nnodes, vx, vol, vth, vp, mu_qoi, vth2, ptl_mass, sml_e_charge, den_ref, upara_ref, tperp_ref, tpara_ref);
+    }
+
+    vector <double> den_f, upara_f, tperp_f, tpara_f;
+    for (iphi=0; iphi<nphi; ++iphi) {
+        compute_C_qois(recon_data, iphi, nnodes, vx, vol, vth, vp, mu_qoi, vth2, ptl_mass, sml_e_charge, den_f, upara_f, tperp_f, tpara_f);
+    }
+    vector <double> den_fg, upara_fg, tperp_fg, tpara_fg;
+    for (iphi=0; iphi<nphi; ++iphi) {
+        compute_C_qois(breg_data, iphi, nnodes, vx, vol, vth, vp, mu_qoi, vth2, ptl_mass, sml_e_charge, den_fg, upara_fg, tperp_fg, tpara_fg);
+    }
+    double den_err_b = rmse_error(den_f, den_ref);
+    double den_err_a = rmse_error(den_fg, den_ref);
+    printf ("Density errors %g, %g\n", den_err_b, den_err_a);
+    double upara_err_b = rmse_error(upara_f, upara_ref);
+    double upara_err_a = rmse_error(upara_fg, upara_ref);
+    printf ("Upara errors %g, %g\n", upara_err_b, upara_err_a);
+    double tperp_err_b = rmse_error(tperp_f, tperp_ref);
+    double tperp_err_a = rmse_error(tperp_fg, tperp_ref);
+    printf ("Tperp errors %g, %g\n", tperp_err_b, tperp_err_a);
+    double tpara_err_b = rmse_error(tpara_f, tpara_ref);
+    double tpara_err_a = rmse_error(tpara_fg, tpara_ref);
+    printf ("Tpara errors %g, %g\n", tpara_err_b, tpara_err_a);
+}
+
 void compare_qois(double* recon_data, double* breg_data, int nphi,
-  int local_nnodes, int vx, vector <double> &vol, vector <double> &vth,
+  int local_nnodes, int vx, double ptl_mass, double sml_e_charge,
+  vector <double> &vol, vector <double> &vth,
   vector <double> &vp, vector <double> &mu_qoi, vector <double> &vth2,
   vector <double> &den_ref, vector <double> &upara_ref,
   vector <double> &tperp_ref, vector <double> &tpara_ref)
 {
     vector <double> den_f, upara_f, tperp_f, tpara_f;
-    double ptl_mass, sml_e_charge;
     int iphi = 0;
     for (iphi=0; iphi<nphi; ++iphi) {
         compute_C_qois(recon_data, iphi, local_nnodes, vx, vol, vth, vp, mu_qoi, vth2, ptl_mass, sml_e_charge, den_f, upara_f, tperp_f, tpara_f);
@@ -634,6 +697,14 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                         for (i=0; i<vx*vy; ++i) {
                             breg_recon[breg_index++] = breg_result[i];
                         }
+                        /*
+                        double mytperp[1521];
+                        for (i=0; i<vx*vy; ++i) {
+                            mytperp[i] = breg_result[i]*V3[
+                                vx*vy*idx + i]/aD;
+                        }
+                        printf ("Mytperp %d\n", mytperp[0]);
+                        */
                         lagranges.push_back(lambdas[0]);
                         lagranges.push_back(lambdas[1]);
                         lagranges.push_back(lambdas[2]);
@@ -752,7 +823,25 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
             }
         }
     }
-    compare_qois(recon, breg_recon, nphi, local_nnodes, vx, vol,
-        vth, vp, mu_qoi, vth2, den_f, upara_f, tperp_f, tpara_f);
+    compare_qois(recon, breg_recon, nphi, local_nnodes, vx, ptl_mass,
+        sml_e_charge, vol, vth, vp, mu_qoi, vth2, den_f, upara_f,
+        tperp_f, tpara_f);
+#ifdef UF_DEBUG
+    const char* reconpath = "/gpfs/alpine/csc143/scratch/tania/compressionpp/results/MGARD_Lagrange_expected/v2_1000/MGARD_uniform_4e15_nonngegative_relu.npy";
+    const char* bregpath = "/gpfs/alpine/csc143/scratch/tania/compressionpp/results/MGARD_Lagrange_expected/v2_1000/den_upara_tperp_tpara/MGARD_uniform_4e15_breg_denorm.npy";
+    const char* xgcpath = "/gpfs/alpine/csc143/scratch/tania/XGC_2/dataset/d3d_coarse_v2_1000.bp/";
+    vector <double> recon_f;
+    vector<unsigned long> recon_data_shape;
+    load_npy_file(reconpath, recon_f, recon_data_shape);
+    vector <double> breg_f;
+    vector<unsigned long> breg_data_shape;
+    load_npy_file(bregpath, breg_f, breg_data_shape);
+    compare_qois_full(datapath, xgcpath, recon_f.data(), breg_f.data());
+    const char* lagrangepath = "/gpfs/alpine/csc143/scratch/tania/compressionpp/results/MGARD_Lagrange_expected/v2_1000/den_upara_tperp_tpara/MGARD_uniform_4e15_lagranges.npy";
+    vector <double> lagrange_f;
+    vector<unsigned long> lagrange_data_shape;
+    load_npy_file(lagrangepath, lagrange_f, lagrange_data_shape);
+    printf("Lagrange shape %d %d\n", lagrange_data_shape[0], lagrange_data_shape[1]);
+#endif
     return lagranges;
 }
