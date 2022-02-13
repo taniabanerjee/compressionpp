@@ -109,6 +109,7 @@ int main(int argc, char *argv[]) {
               << ", " << vy << "}, number of iters: " << num_iter << "\n";
   }
   size_t out_size = 0;
+  size_t lagrange_size = 0;
   for (size_t iter = 0; iter < num_iter; iter++) {
     if (iter == num_iter - 1) {
       iter_nnodes = (size_t)(std::ceil)(
@@ -193,9 +194,10 @@ int main(int argc, char *argv[]) {
          upara_error_a, tperp_error_b, tperp_error_a, tpara_error_b,
          tpara_error_a);
 
+    lagrange_size += lagranges.size();
     double error_L_inf_norm = 0;
     for (int i = 0; i < local_elements; ++i) {
-      double temp = fabs(in_buff[i] - mgard_out_buff[i]);
+      double temp = fabs(in_buff[i] - modified_out_buff[i]);
       if (temp > error_L_inf_norm)
         error_L_inf_norm = temp;
     }
@@ -226,12 +228,14 @@ int main(int argc, char *argv[]) {
   }
 
   mgard_cuda::cudaFreeHostHelper(in_buff);
-  size_t gb_compressed;
+  size_t gb_compressed, gb_compressed_lag;
   MPI_Allreduce(&out_size, &gb_compressed, 1, MPI_UNSIGNED_LONG, MPI_SUM,
                 MPI_COMM_WORLD);
+  MPI_Allreduce(&lagrange_size, &gb_compressed_lag, 1, MPI_UNSIGNED_LONG, MPI_SUM,
+                MPI_COMM_WORLD);
   if (rank == 0) {
-    printf("In size:  %10ld  Out size: %10ld  Compression ratio: %f \n", lSize,
-           gb_compressed, (double)lSize / gb_compressed);
+    printf("In size:  %10ld  Out size: %10ld  Lagrange size: %10ld  Compression ratio: %f \n", lSize,
+           gb_compressed, gb_compressed_lag, (double)lSize / (gb_compressed + gb_compressed_lag));
   }
   reader.Close();
 

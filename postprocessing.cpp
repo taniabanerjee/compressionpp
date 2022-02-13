@@ -427,7 +427,6 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
 
     vector <double> lagranges;
     int count = 0;
-    vector <double> recon_breg;
     double gradients[4] = {0.0, 0.0, 0.0, 0.0};
     double hessians[4][4] = {0.0, 0.0, 0.0, 0.0,
                          0.0, 0.0, 0.0, 0.0,
@@ -506,7 +505,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
     }
     printf ("V2 %g, V3 %g, V4 %g, tpara %g\n", V2[0], V3[0], V4[0], tpara_data[0]);
 #endif
-    // compare vectors V2, V3, V4, and Tpara
+    int breg_index = 0;
     start = clock();
     for (iphi=0; iphi<nphi; ++iphi) {
         double* D = &den_f[iphi*local_nnodes];
@@ -590,7 +589,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                         && isConverged(L2_PD, PDeB);
                     if (converged) {
                         for (i=0; i<vx*vy; ++i) {
-                            recon_breg.push_back(breg_result[i]);
+                            breg_recon[breg_index++] = breg_result[i];
                         }
                         lagranges.push_back(lambdas[0]);
                         lagranges.push_back(lambdas[1]);
@@ -603,7 +602,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                     }
                     else if (count == 20 && !converged) {
                         for (i=0; i<vx*vy; ++i) {
-                            recon_breg.push_back(recon_one[i]);
+                            breg_recon[breg_index++] = recon_one[i];
                         }
                         lagranges.push_back(lambdas[0]);
                         lagranges.push_back(lambdas[1]);
@@ -710,6 +709,5 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
             }
         }
     }
-    breg_recon = recon_breg.data();
     return lagranges;
 }
