@@ -1,6 +1,7 @@
 #include <string.h>
 #include <time.h>
 #include <assert.h>
+#include <omp.h>
 #include "adios2.h"
 #include "postprocessing.hpp"
 // #define UF_DEBUG 0
@@ -25,10 +26,18 @@ double rmse_error(vector <double> &x, vector <double> &y)
     unsigned int ysize = y.size();
     assert(xsize == ysize);
     double e = 0;
+    double maxv = -99999;
+    double minv = 99999;
     for (int i=0; i<xsize; ++i) {
         e += pow((x[i] - y[i]), 2);
+        if (x[i] < minv) {
+            minv = x[i];
+        }
+        if (x[i] > maxv) {
+            maxv = x[i];
+        }
     }
-    return sqrt(e/xsize);
+    return sqrt(e/xsize)/(maxv-minv);
 }
 
 double determinant(double a[4][4], double k);
@@ -298,17 +307,17 @@ void compare_qois_full(const char* datapath, const char* xgcpath,
     for (iphi=0; iphi<nphi; ++iphi) {
         compute_C_qois(breg_data, iphi, nnodes, vx, vol, vth, vp, mu_qoi, vth2, ptl_mass, sml_e_charge, den_fg, upara_fg, tperp_fg, tpara_fg);
     }
-    double den_err_b = rmse_error(den_f, den_ref);
-    double den_err_a = rmse_error(den_fg, den_ref);
+    double den_err_b = rmse_error(den_ref, den_f);
+    double den_err_a = rmse_error(den_ref, den_fg);
     printf ("Density errors %g, %g\n", den_err_b, den_err_a);
-    double upara_err_b = rmse_error(upara_f, upara_ref);
-    double upara_err_a = rmse_error(upara_fg, upara_ref);
+    double upara_err_b = rmse_error(upara_ref, upara_f);
+    double upara_err_a = rmse_error(upara_ref, upara_fg);
     printf ("Upara errors %g, %g\n", upara_err_b, upara_err_a);
-    double tperp_err_b = rmse_error(tperp_f, tperp_ref);
-    double tperp_err_a = rmse_error(tperp_fg, tperp_ref);
+    double tperp_err_b = rmse_error(tperp_ref, tperp_f);
+    double tperp_err_a = rmse_error(tperp_ref, tperp_fg);
     printf ("Tperp errors %g, %g\n", tperp_err_b, tperp_err_a);
-    double tpara_err_b = rmse_error(tpara_f, tpara_ref);
-    double tpara_err_a = rmse_error(tpara_fg, tpara_ref);
+    double tpara_err_b = rmse_error(tpara_ref, tpara_f);
+    double tpara_err_a = rmse_error(tpara_ref, tpara_fg);
     printf ("Tpara errors %g, %g\n", tpara_err_b, tpara_err_a);
 }
 
@@ -328,17 +337,17 @@ void compare_qois(double* recon_data, double* breg_data, int nphi,
     for (iphi=0; iphi<nphi; ++iphi) {
         compute_C_qois(breg_data, iphi, local_nnodes, vx, vol, vth, vp, mu_qoi, vth2, ptl_mass, sml_e_charge, den_fg, upara_fg, tperp_fg, tpara_fg);
     }
-    double den_err_b = rmse_error(den_f, den_ref);
-    double den_err_a = rmse_error(den_fg, den_ref);
+    double den_err_b = rmse_error(den_ref, den_f);
+    double den_err_a = rmse_error(den_ref, den_fg);
     printf ("Density errors %g, %g\n", den_err_b, den_err_a);
-    double upara_err_b = rmse_error(upara_f, upara_ref);
-    double upara_err_a = rmse_error(upara_fg, upara_ref);
+    double upara_err_b = rmse_error(upara_ref, upara_f);
+    double upara_err_a = rmse_error(upara_ref, upara_fg);
     printf ("Upara errors %g, %g\n", upara_err_b, upara_err_a);
-    double tperp_err_b = rmse_error(tperp_f, tperp_ref);
-    double tperp_err_a = rmse_error(tperp_fg, tperp_ref);
+    double tperp_err_b = rmse_error(tperp_ref, tperp_f);
+    double tperp_err_a = rmse_error(tperp_ref, tperp_fg);
     printf ("Tperp errors %g, %g\n", tperp_err_b, tperp_err_a);
-    double tpara_err_b = rmse_error(tpara_f, tpara_ref);
-    double tpara_err_a = rmse_error(tpara_fg, tpara_ref);
+    double tpara_err_b = rmse_error(tpara_ref, tpara_f);
+    double tpara_err_a = rmse_error(tpara_ref, tpara_fg);
     printf ("Tpara errors %g, %g\n", tpara_err_b, tpara_err_a);
 }
 
@@ -709,9 +718,11 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                         lagranges.push_back(lambdas[1]);
                         lagranges.push_back(lambdas[2]);
                         lagranges.push_back(lambdas[3]);
+#ifdef UF_DEBUG
                         if (idx % 2000 == 0) {
                             printf ("node %d finished\n", idx);
                         }
+#endif
                         break;
                     }
                     else if (count == 20 && !converged) {
