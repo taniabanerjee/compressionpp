@@ -77,7 +77,8 @@ int main(int argc, char *argv[]) {
   adios2::IO reader_io = ad.DeclareIO("XGC");
   adios2::Engine reader = reader_io.Open(infile, adios2::Mode::Read);
   adios2::IO bpIO = ad.DeclareIO("WriteBP_File");
-  adios2::Engine writer = bpIO.Open("xgc.mgard.bp", adios2::Mode::Write);
+  adios2::Engine writer = bpIO.Open("xgc_compressed.mgard.bp", adios2::Mode::Write);
+  adios2::Engine writer_lag = bpIO.Open("xgc_lagrange.mgard.bp", adios2::Mode::Write);
 
   adios2::Variable<double> var_i_f_in;
   var_i_f_in = reader_io.InquireVariable<double>("i_f");
@@ -123,6 +124,8 @@ int main(int argc, char *argv[]) {
     }
     std::vector<mgard_cuda::SIZE> shape = {nphi, local_nnodes, vx, vy};
     long unsigned int offset = div_nnodes * iter + iter_nnodes * rank;
+     adios2::Variable<double> bp_ldata = bpIO.DefineVariable<double>(
+      "lag_p", {nphi, nnodes}, {0, offset}, {nphi, local_nnodes});
     std::cout << "rank " << rank << " read from {0, "
               << offset << ", 0, 0} for {" << nphi
               << ", " << local_nnodes << ", " << vx<< ", " << vy << "}\n";
@@ -136,17 +139,17 @@ int main(int argc, char *argv[]) {
     for (size_t i = 0; i < local_elements; i++)
       maxv = (maxv > in_buff[i]) ? maxv : in_buff[i];
     std::cout << "max element: " << maxv << "\n";
-    MPI_Barrier(MPI_COMM_WORLD);
+    // MPI_Barrier(MPI_COMM_WORLD);
 
     double *mgard_out_buff = NULL;
     //        printf("Start compressing and decompressing with GPU\n");
     mgard_cuda::Array<4, double> in_array(shape);
-    MPI_Barrier(MPI_COMM_WORLD);
+    // MPI_Barrier(MPI_COMM_WORLD);
     if (rank == 0) {
       in_time = -MPI_Wtime();
     }
     in_array.loadData(in_buff);
-    MPI_Barrier(MPI_COMM_WORLD);
+    // MPI_Barrier(MPI_COMM_WORLD);
     if (rank == 0) {
       gpu_in_time += (in_time + MPI_Wtime());
     }
@@ -155,14 +158,14 @@ int main(int argc, char *argv[]) {
 
     mgard_cuda::Handle<4, double> handle(shape);
     //        std::cout << "before compression\n";
-    MPI_Barrier(MPI_COMM_WORLD);
+    // MPI_Barrier(MPI_COMM_WORLD);
     if (rank == 0) {
       compress_time = -MPI_Wtime();
     }
     mgard_cuda::Array<1, unsigned char> compressed_array =
         mgard_cuda::compress(handle, in_array, mgard_cuda::error_bound_type::ABS, tol, s);
     //        std::cout << "after compression\n";
-    MPI_Barrier(MPI_COMM_WORLD);
+    // MPI_Barrier(MPI_COMM_WORLD);
     if (rank == 0) {
       gpu_compress_time += (compress_time + MPI_Wtime());
     }
@@ -187,14 +190,14 @@ int main(int argc, char *argv[]) {
     double upara_error_b, upara_error_a, tperp_error_b, tperp_error_a;
     double tpara_error_b, tpara_error_a;
 
-    std::vector <double> lagranges = compute_lagrange_parameters(infile,
+    vector <double> lagranges = compute_lagrange_parameters(infile,
          mgard_out_buff, local_elements, local_nnodes, in_buff, nphi,
          nnodes, vx, vy, offset, maxv, modified_out_buff, pd_error_b,
          pd_error_a, density_error_b, density_error_s, upara_error_b,
          upara_error_a, tperp_error_b, tperp_error_a, tpara_error_b,
          tpara_error_a);
 
-    lagrange_size += lagranges.size();
+    lagrange_size += nphi * local_nnodes * 4;
     double error_L_inf_norm = 0;
     for (int i = 0; i < local_elements; ++i) {
       double temp = fabs(in_buff[i] - modified_out_buff[i]);
@@ -212,15 +215,22 @@ int main(int argc, char *argv[]) {
       printf(ANSI_RED "FAILURE: Error tolerance NOT met!" ANSI_RESET "\n");
       return -1;
     }
-
+/*
     char write_f[2048];
     sprintf(write_f, "xgc.mgard.rank%i_%zu.bin", rank, iter);
     FILE *pFile = fopen(write_f, "wb");
     fwrite(mgard_out_buff, sizeof(double), out_size, pFile);
     fclose(pFile);
+*/
+    // MPI_Barrier(MPI_COMM_WORLD);
+    bp_ldata.SetSelection(adios2::Box<adios2::Dims>(
+          {0, offset},
+          {nphi, local_nnodes}));
+    writer_lag.Put<double>(bp_ldata, lagranges.data());
+    writer_lag.PerformPuts();
     delete mgard_out_buff;
-
   }
+  writer_lag.Close();
   if (rank == 0) {
     std::cout << " CPU to GPU time: " << gpu_in_time
               << ", compression time: " << gpu_compress_time
