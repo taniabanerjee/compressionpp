@@ -20,6 +20,23 @@ void load_npy_file(const char* path, vector <double> &data,
 }
 #endif
 
+double rmse_error_double(double* x, double* y, int nsize)
+{
+    double e = 0;
+    double maxv = -99999;
+    double minv = 99999;
+    for (int i=0; i<nsize; ++i) {
+        e += pow((x[i] - y[i]), 2);
+        if (x[i] < minv) {
+            minv = x[i];
+        }
+        if (x[i] > maxv) {
+            maxv = x[i];
+        }
+    }
+    return sqrt(e/nsize)/(maxv-minv);
+}
+
 double rmse_error(vector <double> &x, vector <double> &y)
 {
     unsigned int xsize = x.size();
@@ -321,8 +338,9 @@ void compare_qois_full(const char* datapath, const char* xgcpath,
     printf ("Tpara errors %g, %g\n", tpara_err_b, tpara_err_a);
 }
 
-void compare_qois(double* recon_data, double* breg_data, int nphi,
-  int local_nnodes, int vx, double ptl_mass, double sml_e_charge,
+void compare_qois(double* recon_data, double* breg_data,
+    double* i_f, int nphi, int local_nnodes, int vx,
+    double ptl_mass, double sml_e_charge,
   vector <double> &vol, vector <double> &vth,
   vector <double> &vp, vector <double> &mu_qoi, vector <double> &vth2,
   vector <double> &den_ref, vector <double> &upara_ref,
@@ -337,6 +355,10 @@ void compare_qois(double* recon_data, double* breg_data, int nphi,
     for (iphi=0; iphi<nphi; ++iphi) {
         compute_C_qois(breg_data, iphi, local_nnodes, vx, vol, vth, vp, mu_qoi, vth2, ptl_mass, sml_e_charge, den_fg, upara_fg, tperp_fg, tpara_fg);
     }
+    int total_points = nphi*local_nnodes*vx*vx;
+    double pd_err_b = rmse_error_double(i_f, recon_data, total_points);
+    double pd_err_a = rmse_error_double(i_f, breg_data, total_points);
+    printf ("PD errors %g, %g\n", pd_err_b, pd_err_a);
     double den_err_b = rmse_error(den_ref, den_f);
     double den_err_a = rmse_error(den_ref, den_fg);
     printf ("Density errors %g, %g\n", den_err_b, den_err_a);
@@ -421,6 +443,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
     // Remove non-negative values from input
     clock_t start = clock();
     int ii, i, j, k;
+#pragma omp parallel for
     for (ii=0; ii<local_elements; ++ii) {
         if (!(recon[ii] > 0)) {
             recon[ii] = 100;
@@ -664,6 +687,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
             count = 0;
             double aD = D[idx]*sml_e_charge;
             while (1) {
+#pragma omp parallel for
                 for (i=0; i<vx*vy; ++i) {
                     K[i] = lambdas[0]*vol[vx*vy*idx + i] +
                            lambdas[1]*V2[vx*vy*idx + i] +
@@ -819,6 +843,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
                     printf("Inverse: %g, %g, %g, %g\n", inverse[0][0], inverse[0][1], inverse[0][2], inverse[0][3]);
 #endif
                     double matmul[4] = {0, 0, 0, 0};
+#pragma omp parallel for
                     for (i=0; i<4; ++i) {
                         matmul[i] = 0;
                         for (k=0; k<4; ++k) {
@@ -834,7 +859,7 @@ vector<double> compute_lagrange_parameters(const char* filepath, double* recon, 
             }
         }
     }
-    compare_qois(recon, breg_recon, nphi, local_nnodes, vx, ptl_mass,
+    compare_qois(recon, breg_recon, i_f, nphi, local_nnodes, vx, ptl_mass,
         sml_e_charge, vol, vth, vp, mu_qoi, vth2, den_f, upara_f,
         tperp_f, tpara_f);
 #ifdef UF_DEBUG
