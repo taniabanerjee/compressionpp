@@ -60,13 +60,14 @@ int main(int argc, char *argv[]) {
   }
 
   char *infile; //, *outfile;
-  double tol, s = 0;
+  double tol, s = 0, bigtest = 0;
 
   int i = 1;
   infile = argv[i++];
   tol = atof(argv[i++]);
   s = atof(argv[i++]);
   double job_sz = atof(argv[i++]);
+  bigtest = atof(argv[i++]);
   if (rank == 0) {
     printf("Input data: %s ", infile);
     printf("Abs. error bound: %.2e ", tol);
@@ -86,10 +87,20 @@ int main(int argc, char *argv[]) {
     std::cout << "Didn't find i_f...exit\n";
     exit(1);
   }
-  mgard_cuda::SIZE vx = var_i_f_in.Shape()[2];
-  mgard_cuda::SIZE vy = var_i_f_in.Shape()[3];
-  mgard_cuda::SIZE nnodes = var_i_f_in.Shape()[1];
-  mgard_cuda::SIZE nphi = var_i_f_in.Shape()[0];
+  int vxIndex = 2;
+  int vyIndex = 3;
+  int nodeIndex = 1;
+  int planeIndex = 0;
+  if (bigtest) {
+      vxIndex = 1;
+      vyIndex = 3;
+      nodeIndex = 2;
+      planeIndex = 0;
+  }
+  mgard_cuda::SIZE vx = var_i_f_in.Shape()[vxIndex];
+  mgard_cuda::SIZE vy = var_i_f_in.Shape()[vyIndex];
+  mgard_cuda::SIZE nnodes = var_i_f_in.Shape()[nodeIndex];
+  mgard_cuda::SIZE nphi = var_i_f_in.Shape()[planeIndex];
   size_t gb_elements = nphi * vx * nnodes * vy;
   size_t num_iter =
       (size_t)(std::ceil)((double)gb_elements * sizeof(double) / 1024.0 /
@@ -106,8 +117,8 @@ int main(int argc, char *argv[]) {
   mgard_cuda::cudaMallocHostHelper((void **)&in_buff,
                                    sizeof(double) * local_elements);
   if (rank == 0) {
-    std::cout << "total data size: {" << nphi << ", " << nnodes << ", " << vx 
-              << ", " << vy << "}, number of iters: " << num_iter << "\n";
+    std::cout << "total data size: {" << nphi << ", " << nnodes << ", "
+      << vx << ", " << vy << "}, number of iters: " << num_iter << "\n";
   }
   size_t out_size = 0;
   size_t lagrange_size = 0;
@@ -123,15 +134,36 @@ int main(int argc, char *argv[]) {
       local_elements = local_nnodes * vx * vy * nphi;
     }
     std::vector<mgard_cuda::SIZE> shape = {nphi, local_nnodes, vx, vy};
+    if (bigtest) {
+        shape[1] = vx;
+        shape[2] = local_nnodes;
+    }
     long unsigned int offset = div_nnodes * iter + iter_nnodes * rank;
-     adios2::Variable<double> bp_ldata = bpIO.DefineVariable<double>(
+    adios2::Variable<double> bp_ldata = bpIO.DefineVariable<double>(
       "lag_p", {nphi, nnodes}, {0, offset}, {nphi, local_nnodes});
-    std::cout << "rank " << rank << " read from {0, "
+    if (bigtest) {
+        std::cout << "rank " << rank << " read from {0, 0, "
+              << offset << ", 0} for {" << nphi << ", " << vx << ", "
+              << local_nnodes << ", " << vy << "}\n";
+    }
+    else {
+        std::cout << "rank " << rank << " read from {0, "
               << offset << ", 0, 0} for {" << nphi
               << ", " << local_nnodes << ", " << vx<< ", " << vy << "}\n";
-    var_i_f_in.SetSelection(adios2::Box<adios2::Dims>(
-        {0, offset, 0, 0},
-        {nphi, local_nnodes, vx, vy}));
+    }
+    std::vector<unsigned long> dim1 = {0, offset, 0, 0};
+    std::vector<unsigned long> dim2 = {nphi, local_nnodes, vx, vy};
+    std::pair<std::vector<unsigned long>, std::vector<unsigned long>> dim;
+    dim.first = dim1;
+    dim.second = dim2;
+    if (bigtest) {
+        dim1[1] = 0;
+        dim1[2] = offset;
+        dim2[1] = vx;
+        dim2[2] = local_nnodes;
+    }
+
+    var_i_f_in.SetSelection(adios2::Box<adios2::Dims>(dim));
     reader.Get<double>(var_i_f_in, in_buff);
     reader.PerformGets();
 
@@ -186,16 +218,17 @@ int main(int argc, char *argv[]) {
     memcpy(mgard_out_buff, out_array.getDataHost(),
            local_elements * sizeof(double));
 
-    double pd_error_b, pd_error_a, density_error_b, density_error_s;
+    double pd_error_b, pd_error_a, density_error_b, density_error_a;
     double upara_error_b, upara_error_a, tperp_error_b, tperp_error_a;
-    double tpara_error_b, tpara_error_a;
+    double tpara_error_b, tpara_error_a, n0_error_b, n0_error_a;
+    double T0_error_b, T0_error_a;
 
     vector <double> lagranges = compute_lagrange_parameters(infile,
          mgard_out_buff, local_elements, local_nnodes, in_buff, nphi,
          nnodes, vx, vy, offset, maxv, modified_out_buff, pd_error_b,
-         pd_error_a, density_error_b, density_error_s, upara_error_b,
+         pd_error_a, density_error_b, density_error_a, upara_error_b,
          upara_error_a, tperp_error_b, tperp_error_a, tpara_error_b,
-         tpara_error_a);
+         tpara_error_a, n0_error_b, n0_error_a, T0_error_b, T0_error_a);
 
     lagrange_size += nphi * local_nnodes * 4;
     double error_L_inf_norm = 0;
@@ -215,19 +248,21 @@ int main(int argc, char *argv[]) {
       printf(ANSI_RED "FAILURE: Error tolerance NOT met!" ANSI_RESET "\n");
       return -1;
     }
-/*
     char write_f[2048];
     sprintf(write_f, "xgc.mgard.rank%i_%zu.bin", rank, iter);
     FILE *pFile = fopen(write_f, "wb");
     fwrite(mgard_out_buff, sizeof(double), out_size, pFile);
     fclose(pFile);
-*/
+/*
     // MPI_Barrier(MPI_COMM_WORLD);
+    unsigned char *mgard_compress_buff = new unsigned char[out_size];
+    memcpy(mgard_compress_buff, compressed_array.getDataHost(), out_size);
     bp_ldata.SetSelection(adios2::Box<adios2::Dims>(
           {0, offset},
           {nphi, local_nnodes}));
     writer_lag.Put<double>(bp_ldata, lagranges.data());
     writer_lag.PerformPuts();
+*/
     delete mgard_out_buff;
   }
   writer_lag.Close();
