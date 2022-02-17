@@ -61,6 +61,7 @@ int main(int argc, char *argv[]) {
 
   char *infile; //, *outfile;
   double tol, s = 0, bigtest = 0;
+  int timestep=0;
 
   int i = 1;
   infile = argv[i++];
@@ -68,6 +69,7 @@ int main(int argc, char *argv[]) {
   s = atof(argv[i++]);
   double job_sz = atof(argv[i++]);
   bigtest = atof(argv[i++]);
+  timestep = atof(argv[i++]);
   if (rank == 0) {
     printf("Input data: %s ", infile);
     printf("Abs. error bound: %.2e ", tol);
@@ -171,17 +173,17 @@ int main(int argc, char *argv[]) {
     for (size_t i = 0; i < local_elements; i++)
       maxv = (maxv > in_buff[i]) ? maxv : in_buff[i];
     std::cout << "max element: " << maxv << "\n";
-    // MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Barrier(MPI_COMM_WORLD);
 
     double *mgard_out_buff = NULL;
     //        printf("Start compressing and decompressing with GPU\n");
     mgard_cuda::Array<4, double> in_array(shape);
-    // MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Barrier(MPI_COMM_WORLD);
     if (rank == 0) {
       in_time = -MPI_Wtime();
     }
     in_array.loadData(in_buff);
-    // MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Barrier(MPI_COMM_WORLD);
     if (rank == 0) {
       gpu_in_time += (in_time + MPI_Wtime());
     }
@@ -190,14 +192,14 @@ int main(int argc, char *argv[]) {
 
     mgard_cuda::Handle<4, double> handle(shape);
     //        std::cout << "before compression\n";
-    // MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Barrier(MPI_COMM_WORLD);
     if (rank == 0) {
       compress_time = -MPI_Wtime();
     }
     mgard_cuda::Array<1, unsigned char> compressed_array =
         mgard_cuda::compress(handle, in_array, mgard_cuda::error_bound_type::ABS, tol, s);
     //        std::cout << "after compression\n";
-    // MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Barrier(MPI_COMM_WORLD);
     if (rank == 0) {
       gpu_compress_time += (compress_time + MPI_Wtime());
     }
@@ -218,17 +220,14 @@ int main(int argc, char *argv[]) {
     memcpy(mgard_out_buff, out_array.getDataHost(),
            local_elements * sizeof(double));
 
-    double pd_error_b, pd_error_a, density_error_b, density_error_a;
-    double upara_error_b, upara_error_a, tperp_error_b, tperp_error_a;
-    double tpara_error_b, tpara_error_a, n0_error_b, n0_error_a;
-    double T0_error_b, T0_error_a;
+    vector <const char*> error_names = {"PD error", "Density error", "Upara error", "Tperp error", "Tpara error", "n0 error", "T0 error"};
+    double* before_errors = new double [error_names.size()];
+    double* after_errors = new double [error_names.size()];
 
     vector <double> lagranges = compute_lagrange_parameters(infile,
          mgard_out_buff, local_elements, local_nnodes, in_buff, nphi,
-         nnodes, vx, vy, offset, maxv, modified_out_buff, pd_error_b,
-         pd_error_a, density_error_b, density_error_a, upara_error_b,
-         upara_error_a, tperp_error_b, tperp_error_a, tpara_error_b,
-         tpara_error_a, n0_error_b, n0_error_a, T0_error_b, T0_error_a);
+         nnodes, vx, vy, offset, maxv, modified_out_buff,
+         before_errors, after_errors);
 
     lagrange_size += nphi * local_nnodes * 4;
     double error_L_inf_norm = 0;
@@ -249,10 +248,19 @@ int main(int argc, char *argv[]) {
       return -1;
     }
     char write_f[2048];
-    sprintf(write_f, "xgc.mgard.rank%i_%zu.bin", rank, iter);
+    sprintf(write_f, "xgc.mgard.rank%i_%zu_%i.bin", rank, iter, timestep);
     FILE *pFile = fopen(write_f, "wb");
     fwrite(mgard_out_buff, sizeof(double), out_size, pFile);
     fclose(pFile);
+    sprintf(write_f, "xgc.qoi.rank%i_%zu_%i.txt", rank, iter, timestep);
+    FILE* pFileTxt = fopen(write_f, "w");
+    char output[100];
+    for (int fi=0; fi < error_names.size(); ++fi) {
+        sprintf(output, "%s, %5.3g, %5.3g\n", error_names[fi],
+            before_errors[fi], after_errors[fi]);
+        fputs(output, pFileTxt);
+    }
+    fclose(pFileTxt);
 /*
     // MPI_Barrier(MPI_COMM_WORLD);
     unsigned char *mgard_compress_buff = new unsigned char[out_size];
