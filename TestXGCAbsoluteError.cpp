@@ -80,8 +80,8 @@ int main(int argc, char *argv[]) {
   adios2::IO reader_io = ad.DeclareIO("XGC");
   adios2::Engine reader = reader_io.Open(infile, adios2::Mode::Read);
   adios2::IO bpIO = ad.DeclareIO("WriteBP_File");
-  adios2::Engine writer = bpIO.Open("xgc_compressed.mgard.bp", adios2::Mode::Write);
-  adios2::Engine writer_lag = bpIO.Open("xgc_lagrange.mgard.bp", adios2::Mode::Write);
+  // adios2::Engine writer = bpIO.Open("xgc_compressed.mgard.bp", adios2::Mode::Write);
+  // adios2::Engine writer_lag = bpIO.Open("xgc_lagrange.mgard.bp", adios2::Mode::Write);
 
   adios2::Variable<double> var_i_f_in;
   var_i_f_in = reader_io.InquireVariable<double>("i_f");
@@ -230,18 +230,30 @@ int main(int argc, char *argv[]) {
          before_errors, after_errors);
 
     lagrange_size += nphi * local_nnodes * 4;
-    double error_L_inf_norm = 0;
+    // double error_L_inf_norm = 0;
+    // for (int i = 0; i < local_elements; ++i) {
+    //   double temp = fabs(in_buff[i] - modified_out_buff[i]);
+    //   if (temp > error_L_inf_norm)
+    //     error_L_inf_norm = temp;
+    // }
+    // double absolute_L_inf_error = error_L_inf_norm;
+
+    double error_L2_norm = 0;
     for (int i = 0; i < local_elements; ++i) {
-      double temp = fabs(in_buff[i] - modified_out_buff[i]);
-      if (temp > error_L_inf_norm)
-        error_L_inf_norm = temp;
+        double temp = pow((in_buff[i] - modified_out_buff[i]),2);
+        error_L2_norm += temp;
     }
-    double absolute_L_inf_error = error_L_inf_norm;
+    double L2_error = sqrt(error_L2_norm);
+    printf("L2 error bound: %10.5E \n", tol);
+    printf("L2 error: %10.5E \n", L2_error);
 
-    printf("Abs. L^infty error bound: %10.5E \n", tol);
-    printf("Abs. L^infty error: %10.5E \n", absolute_L_inf_error);
-
-    if (absolute_L_inf_error < tol) {
+    // if (absolute_L_inf_error < tol) {
+    //   printf(ANSI_GREEN "SUCCESS: Error tolerance met!" ANSI_RESET "\n");
+    // } else {
+    //   printf(ANSI_RED "FAILURE: Error tolerance NOT met!" ANSI_RESET "\n");
+    //   // return -1;
+    // }
+    if (L2_error < tol) {
       printf(ANSI_GREEN "SUCCESS: Error tolerance met!" ANSI_RESET "\n");
     } else {
       printf(ANSI_RED "FAILURE: Error tolerance NOT met!" ANSI_RESET "\n");
@@ -273,7 +285,7 @@ int main(int argc, char *argv[]) {
 */
     delete mgard_out_buff;
   }
-  writer_lag.Close();
+  // writer_lag.Close();
   if (rank == 0) {
     std::cout << " CPU to GPU time: " << gpu_in_time
               << ", compression time: " << gpu_compress_time
