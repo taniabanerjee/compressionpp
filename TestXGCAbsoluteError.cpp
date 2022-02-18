@@ -243,7 +243,7 @@ int main(int argc, char *argv[]) {
         double temp = pow((in_buff[i] - modified_out_buff[i]),2);
         error_L2_norm += temp;
     }
-    double L2_error = sqrt(error_L2_norm);
+    double L2_error = sqrt(error_L2_norm/local_elements);
     printf("L2 error bound: %10.5E \n", tol);
     printf("L2 error: %10.5E \n", L2_error);
 
